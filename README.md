@@ -1,10 +1,8 @@
 # MinionsCode
 
-A cross-platform TUI dashboard for [Claude Code](https://claude.com/claude-code)
-sessions. One static-ish Rust binary, no embedded terminal — selecting a
-session runs `claude --resume <id>` directly in your current tty (optionally
-wrapped in a tmux session so it survives detach), so the conversation keeps
-full input fidelity: paste, mouse, ANSI, the works.
+> A terminal dashboard for managing every Claude Code session on your machine.
+
+**English** · [简体中文](README.zh-CN.md)
 
 ```
 ┌─ MinionsCode ──── 49 sessions · 1 active · ▶ 2 tmux · $2916.45 total ──────┐
@@ -17,197 +15,181 @@ full input fidelity: paste, mouse, ANSI, the works.
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Install
+One binary. Pick a session, press `Enter`, you're in `claude --resume`.
+Detach with `Ctrl-b d`, the conversation keeps running, pick another one,
+come back later — all without opening a single new window.
 
-One-liner — no Rust toolchain needed:
+---
+
+## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ChengAoShen/MinionsCode/main/install.sh | bash
 ```
 
-Downloads the prebuilt binary for your platform from
-[Releases](https://github.com/ChengAoShen/MinionsCode/releases) and drops it
-into `~/.local/bin/minionscode`. Honors `INSTALL_DIR=/usr/local/bin` and
-`VERSION=v0.2.0` as overrides.
+That's it. The script downloads the prebuilt binary for your platform and
+installs it to `~/.local/bin/minionscode`. No Rust toolchain required.
 
-Prebuilt platforms:
+**Supported:** Linux x86_64, macOS (Intel + Apple Silicon).
+**Windows:** run it inside WSL.
 
-- Linux x86_64
-- macOS x86_64 (Intel)
-- macOS aarch64 (Apple Silicon)
+Tip: if `~/.local/bin` isn't on your `$PATH`, the installer tells you what
+to add to your shell rc.
 
-Windows users: run inside WSL.
+To update later, just re-run the same command — it always pulls the latest
+release.
 
-### Build from source
-
-```bash
-git clone https://github.com/ChengAoShen/MinionsCode.git
-cd MinionsCode
-./build.sh                            # cargo build --release + install to ~/.local/bin
-```
-
-Requires Rust 1.74+.
-
-### Optional: tmux
-
-If `tmux` is on `$PATH`, MinionsCode automatically wraps every launched
-session in a managed tmux session (prefix `mc-`). This is what gives you
-multi-session: detach from one (`Ctrl-b d`) and you're back in the TUI
-with the session still running in the background.
-
-Without tmux, MinionsCode falls back to direct exec — one session at a
-time, no detach. Same experience as before tmux integration.
-
-## Usage
+## First run
 
 ```bash
-minionscode                # launch the TUI
-minionscode --list         # non-interactive: print sessions and exit
-minionscode --days 7       # only look back 7 days (default 30)
-minionscode --version
+minionscode
 ```
 
-## How sessions work
+You'll see every session on this machine — currently alive at the top,
+recent below, then everything else from the last 30 days. Press `?` any
+time for the full keymap.
 
-| What you do | What happens |
-|---|---|
-| Press `⏎` on a row with `●` | Launch `claude --resume` in a fresh tmux session `mc-<short-id>`, attach |
-| Press `⏎` on a row with `▶` | Re-attach to the existing tmux session — picks up exactly where you left off |
-| Inside claude: `Ctrl-b d` | Detach. The tmux session keeps running; you return to the TUI; the row now shows `▶` |
-| Inside claude: `/exit` or `Ctrl-D` | Exit claude cleanly. tmux session ends. Row returns to `●` / `○` |
-| `K` on a `▶` row | Force-kill the background tmux session (will SIGTERM claude) |
-| `n` (new claude) | Same flow, but starts a fresh conversation in the selected `cwd` |
-| `N` | Same as `n`, but pops up an options form (model / dangerous / sandbox / verbose / add-dir) first |
-| `s` | Open the user's `$SHELL` in the selected `cwd`, also inside a managed tmux session |
+The basics:
 
-So a full multi-session workflow looks like:
+| Key | What happens |
+|-----|--------------|
+| `↑` / `↓` | move the selection |
+| `Enter` | resume the highlighted session |
+| `n` | start a fresh `claude` in that session's directory |
+| `s` | drop into a shell in that directory |
+| `/` | filter by name / path; `Enter` falls back to AI search if nothing matches |
+| `q` | quit |
 
-1. Resume session A → talk a bit → `Ctrl-b d` (now A is `▶ tmux idle` in the background)
-2. `↓` to session B → `Enter` to resume → talk a bit → `Ctrl-b d`
-3. Both are running in tmux now. `↑` back to A → `Enter` re-attaches. Repeat.
+## Multi-session, made simple
 
-If MinionsCode is itself launched **inside** a tmux client, it skips its own
-tmux wrapping (no nested tmux — that's a UX trap). You get the legacy
-"one-at-a-time" behavior, but you can use your existing tmux's
-window / pane switching for multi-tasking.
+If you have `tmux` installed (Homebrew: `brew install tmux`, apt:
+`sudo apt install tmux`), MinionsCode automatically wraps every session
+in a managed background process. That means:
 
-## Keys
+1. `Enter` on session A → talk for a while → `Ctrl-b d`
+2. The TUI reappears. Session A is now marked `▶` (running in the
+   background).
+3. `Enter` on session B → talk to a different model in a different repo
+   → `Ctrl-b d` again.
+4. Both are running. `Enter` on A re-attaches *exactly* where you left
+   off. Switch back and forth all day.
+
+To force-end a backgrounded session: select it, press `K`, confirm.
+
+Without `tmux`, MinionsCode still works — it just runs claude directly,
+one at a time. You exit claude the normal way (`/exit`, `Ctrl-D`) and
+you're back at the dashboard.
+
+## Highlights
+
+- **Live status.** Color-coded per session: green = idle, amber = busy,
+  purple = thinking, teal `▶` = running in the background. Updates show
+  up in well under a second.
+- **Cost at a glance.** Per-session token usage and dollar cost, plus a
+  daily total in the header.
+- **Group by directory.** Working on multiple repos? Each row is grouped
+  under its `cwd`; collapse the ones you don't care about with `space`.
+- **AI search.** `/` is a normal substring filter; if nothing matches,
+  `Enter` falls back to a Haiku call that searches across session
+  content. `\` forces AI search directly.
+- **Auto-naming.** `A` asks Haiku to give your unnamed sessions short,
+  meaningful titles based on what was discussed.
+- **Notifications.** When a backgrounded `busy` session goes back to
+  `idle` (i.e., Claude is waiting for you), you get a desktop banner.
+  Mute with `M`.
+- **Launch options.** `N` opens a form to start `claude` with
+  `--model`, `--dangerously-skip-permissions`, `--sandbox`, `--verbose`,
+  `--add-dir` toggles.
+
+## Keys reference
 
 **Navigation**
 
 | Key | Action |
 |-----|--------|
-| `↑ ↓` / `j k` | navigate |
+| `↑` `↓` / `j` `k` | move |
 | `g` / `G` | first / last |
-| `space` / `tab` | collapse / expand current group |
+| `space` / `tab` | collapse / expand the current group |
 | `o` / `O` | collapse inactive / expand all groups |
-| `T` | toggle grouping by directory |
+| `T` | toggle directory grouping |
 
-**Session actions**
-
-| Key | Action |
-|-----|--------|
-| `⏎` | resume / re-attach selected session |
-| `n` | new claude in the selected cwd (defaults) |
-| `N` | new claude with an options form |
-| `s` | new shell in the selected cwd |
-| `r` | rename (saved to `~/.minionscode/session-names.json`) |
-| `K` | kill the background tmux session backing the selected row |
-
-**Search & AI**
+**Sessions**
 
 | Key | Action |
 |-----|--------|
-| `/` | literal filter; `⏎` falls back to AI search if nothing matches |
-| `\` | force AI search using the current filter buffer (Haiku) |
-| `A` | auto-name up to 12 unnamed sessions via Haiku |
+| `Enter` | resume / re-attach the highlighted session |
+| `n` | new `claude` in that cwd (defaults) |
+| `N` | new `claude` with options form |
+| `s` | new shell in that cwd |
+| `r` | rename |
+| `K` | kill the background tmux session for this row |
+
+**Search**
+
+| Key | Action |
+|-----|--------|
+| `/` | literal filter |
+| `\` | force AI search |
+| `A` | auto-name unnamed sessions |
 
 **Maintenance**
 
 | Key | Action |
 |-----|--------|
 | `D` | delete junk sessions (tmp / empty) |
-| `E` | delete empty sessions |
-| `M` | toggle desktop notifications |
+| `E` | delete sessions with no messages |
+| `M` | toggle notifications |
 | `R` | refresh now |
-| `?` | help overlay |
+| `?` | this help |
 | `q` / `Ctrl-C` | quit |
 
-## Layout
+## FAQ
 
-Responsive — adapts to terminal size:
+**Where does it find sessions?** It reads `~/.claude/sessions/` (live
+PIDs) and `~/.claude/projects/<cwd>/*.jsonl` (conversation history) —
+the same files Claude Code itself writes.
 
-- **Wide** (≥ 110 cols): list + detail side-by-side
-- **Stacked** (≥ 70 cols, ≥ 24 rows): list on top, compact detail below
-- **Narrow** (smaller): list only; selected session summary collapses into the footer
+**Will it slow my machine down?** No. It uses a file watcher
+(inotify / FSEvents) and only re-reads files that actually changed.
+The CPU footprint when idle is essentially zero.
 
-## Status display
+**Does it talk to any servers?** Only when you press `\` or `A`, which
+invoke `claude --print --model haiku` locally — and only Anthropic's
+API sees those queries. The dashboard itself is entirely local.
 
-| Marker | Meaning |
-|--------|---------|
-| 🟢 `●` green | alive, `idle` (waiting for input) |
-| 🟠 `●` amber | alive, `busy` (executing / tool call) |
-| 🟣 `●` purple | alive, `thinking` (extended thinking) |
-| 🟦 `▶` teal | session is running in a background tmux session (re-attachable) |
-| 🟡 `●` gold | exited but recently active |
-| ⚪ `○` muted | old, ended |
+**Can I point it at a different `claude` binary?** Yes:
+`CLAUDE_BIN=/path/to/claude minionscode`. It also auto-discovers
+`/opt/homebrew/bin/claude`, `/usr/local/bin/claude`,
+`~/.claude/local/bin/claude`, `~/.local/bin/claude`, and `$PATH`.
 
-Status strings come directly from `~/.claude/sessions/<id>.json` — whatever
-Claude Code writes is what you see. The `▶` overlay reflects `tmux ls`.
+**How do I uninstall?** `rm ~/.local/bin/minionscode`. That's all.
 
-## Refresh strategy
+## Configuration knobs
 
-Four layers, designed so updates feel instant without hammering disk:
+```bash
+minionscode --days 7        # only look back 7 days (default 30)
+minionscode --list          # print sessions to stdout, no TUI
+minionscode --version
+INSTALL_DIR=/usr/local/bin VERSION=v0.2.0 bash install.sh
+CLAUDE_BIN=/opt/homebrew/bin/claude minionscode
+```
 
-1. **File watcher** (`notify` crate — inotify / FSEvents / kqueue) on
-   `~/.claude/sessions/` and `~/.claude/projects/` → 180 ms debounce →
-   re-scan.
-2. **PID / status sweep** every ~1.5 s — re-reads only the small
-   `sessions/*.json` files and verifies PIDs via `kill -0`.
-3. **tmux poll** every ~2 s — `tmux list-sessions` to reconcile the
-   background-session indicator.
-4. **Fallback full scan** every 30 s (5 s if the watcher couldn't attach).
+Persistent state: custom session names go to
+`~/.minionscode/session-names.json`. That's the only file MinionsCode
+writes.
 
-End-to-end, status changes typically show up in well under one second.
+## Build from source
 
-## Notifications
+```bash
+git clone https://github.com/ChengAoShen/MinionsCode.git
+cd MinionsCode
+./build.sh
+```
 
-Fires a desktop notification when a live `claude` session transitions from
-`busy` → `idle` after having been busy for ≥ 8 s, with a 30 s per-session
-cooldown — designed to skip short tool turns and only signal completion of a
-real conversation.
-
-Backend:
-- **macOS**: `osascript` (native banner)
-- **Linux**: `notify-send`
-- **everywhere**: terminal bell (`\x07`)
-
-Toggle with `M` inside the TUI.
-
-## What it reads
-
-- `~/.claude/sessions/*.json` — live PIDs (`kill -0` to verify)
-- `~/.claude/projects/<encoded-cwd>/*.jsonl` — per-session token usage,
-  parsed and cached by `size:mtime`
-- `tmux list-sessions -F '#S'` — to know which Claude sessions are in
-  detachable background mode
-
-Token costs use public Anthropic pricing (Opus / Sonnet / Haiku, inputs /
-outputs / cache reads / cache writes).
-
-## Custom claude binary
-
-Auto-discovery checks in order:
-
-1. `$CLAUDE_BIN`
-2. `/opt/homebrew/bin/claude`
-3. `/usr/local/bin/claude`
-4. `~/.claude/local/bin/claude`
-5. `~/.local/bin/claude`
-6. `$PATH`
-
-Set `CLAUDE_BIN=/path/to/claude` to override.
+Requires Rust 1.74+. The build script compiles a release binary and
+installs it to `~/.local/bin/minionscode` (override with
+`PREFIX=/usr/local`).
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
