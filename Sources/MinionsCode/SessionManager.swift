@@ -81,8 +81,29 @@ final class SessionManager {
             let history = Self.scanHistory(claudeDir: claudeDir, customNames: snapshotNames, days: days)
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
+                let historyById = Dictionary(uniqueKeysWithValues: history.map { ($0.id, $0) })
                 let liveSet = Set(self.sessions.filter(\.isAlive).map(\.id))
-                var merged = self.sessions.filter(\.isAlive)
+                var merged: [SessionInfo] = []
+                // Enrich alive sessions with parsed model/usage from their JSONL.
+                // Phase 1 stat-only walks leave model=nil; Phase 2 fills it in.
+                for live in self.sessions where live.isAlive {
+                    if let h = historyById[live.id] {
+                        merged.append(SessionInfo(
+                            id: live.id, pid: live.pid, sessionId: live.sessionId,
+                            name: live.name == Self.shortPathStatic(live.cwd) ? h.name : live.name,
+                            cwd: live.cwd, status: live.status, startedAt: live.startedAt,
+                            lastActivityAt: live.lastActivityAt ?? h.lastActivityAt,
+                            version: live.version,
+                            model: h.model ?? live.model,
+                            usage: h.usage,
+                            cost: h.cost,
+                            cacheHitRate: h.cacheHitRate,
+                            isAlive: true
+                        ))
+                    } else {
+                        merged.append(live)
+                    }
+                }
                 for entry in history where !liveSet.contains(entry.id) {
                     merged.append(entry)
                 }

@@ -49,4 +49,20 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST'
 PLIST
 
 echo "Installed to $APP_BUNDLE"
-echo "Run: open $APP_BUNDLE"
+
+# Kill any running instance so the next launch picks up the fresh binary —
+# easy to forget "did I restart MinionsCode after rebuilding?" otherwise.
+if pgrep -x MinionsCode >/dev/null 2>&1; then
+    echo "Stopping running MinionsCode instance..."
+    pkill -x MinionsCode 2>/dev/null || true
+    sleep 1
+    pkill -9 -x MinionsCode 2>/dev/null || true
+    sleep 1
+fi
+
+if [ "$1" = "--launch" ] || [ "$1" = "-r" ]; then
+    echo "Launching..."
+    open "$APP_BUNDLE"
+else
+    echo "Run: open $APP_BUNDLE  (or: bash install.sh --launch)"
+fi

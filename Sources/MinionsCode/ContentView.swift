@@ -26,6 +26,7 @@ struct ContentView: View {
     @State private var orderedTerminalIds: [String] = []
     @State private var showingCloseConfirm = false
     @State private var pendingCloseId: String?
+    @State private var modelFilter: ModelFamilyFilter = .all
 
     private var sidebarTargetWidth: CGFloat {
         sidebarCollapsed ? 0 : sidebarWidth
@@ -119,6 +120,7 @@ struct ContentView: View {
                 if let id = pendingCloseId { reallyCloseTerminal(id) }
                 pendingCloseId = nil
             }
+            .keyboardShortcut(.defaultAction)
         } message: { _ in
             Text("This terminal has a process running. Closing will terminate it.")
         }
@@ -169,24 +171,34 @@ struct ContentView: View {
     }
 
     private var filterBar: some View {
-        HStack(spacing: 6) {
-            FilterChip(label: "\(settings.historyHorizonDays)d", systemImage: "calendar", isOn: true) {
-                let next = (settings.historyHorizonDays == 7) ? 30 :
-                           (settings.historyHorizonDays == 30) ? 1 :
-                           (settings.historyHorizonDays == 1) ? 3 : 7
-                settings.historyHorizonDays = next
-                manager.scan()
+        VStack(spacing: 4) {
+            HStack(spacing: 6) {
+                FilterChip(label: "\(settings.historyHorizonDays)d", systemImage: "calendar", isOn: true) {
+                    let next = (settings.historyHorizonDays == 7) ? 30 :
+                               (settings.historyHorizonDays == 30) ? 1 :
+                               (settings.historyHorizonDays == 1) ? 3 : 7
+                    settings.historyHorizonDays = next
+                    manager.scan()
+                }
+                FilterChip(label: "Empty", systemImage: "tray", isOn: !settings.hideEmptyFolders) {
+                    settings.hideEmptyFolders.toggle()
+                }
+                FilterChip(label: "Inactive", systemImage: "moon.zzz", isOn: !settings.hideInactiveFolders) {
+                    settings.hideInactiveFolders.toggle()
+                }
+                FilterChip(label: "Collapse", systemImage: "rectangle.compress.vertical", isOn: settings.collapseInactivesInFolder) {
+                    settings.collapseInactivesInFolder.toggle()
+                }
+                Spacer()
             }
-            FilterChip(label: "Empty", systemImage: "tray", isOn: !settings.hideEmptyFolders) {
-                settings.hideEmptyFolders.toggle()
+            HStack(spacing: 6) {
+                ForEach(ModelFamilyFilter.allCases, id: \.self) { f in
+                    ModelFilterChip(filter: f, isOn: modelFilter == f) {
+                        modelFilter = (modelFilter == f) ? .all : f
+                    }
+                }
+                Spacer()
             }
-            FilterChip(label: "Inactive", systemImage: "moon.zzz", isOn: !settings.hideInactiveFolders) {
-                settings.hideInactiveFolders.toggle()
-            }
-            FilterChip(label: "Collapse", systemImage: "rectangle.compress.vertical", isOn: settings.collapseInactivesInFolder) {
-                settings.collapseInactivesInFolder.toggle()
-            }
-            Spacer()
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -234,9 +246,13 @@ struct ContentView: View {
     }
 
     private var filteredSessions: [SessionInfo] {
-        guard !searchText.isEmpty else { return manager.sessions }
+        var result = manager.sessions
+        if modelFilter != .all {
+            result = result.filter { modelFilter.matches($0.model) }
+        }
+        guard !searchText.isEmpty else { return result }
         let q = searchText.lowercased()
-        return manager.sessions.filter { s in
+        return result.filter { s in
             s.name.lowercased().contains(q)
                 || s.cwd.lowercased().contains(q)
                 || (s.model?.lowercased().contains(q) ?? false)
@@ -322,6 +338,8 @@ struct ContentView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+        // Match statusStrip — the top strip is the most opaque layer.
+        .background(BG_DARKEST.opacity(settings.translucentBackground ? 0.78 : 0))
     }
 
     private var globalStats: some View {
@@ -442,11 +460,15 @@ struct ContentView: View {
                 } else {
                     emptyState
                 }
-                ReadOnlyToastOverlay(activeTerminalId: activeTerminalId, onEnableEditing: {
-                    if let tid = activeTerminalId, let t = terminals[tid] {
-                        t.setReadOnly(false)
+                ReadOnlyToastOverlay(
+                    activeTerminalId: activeTerminalId,
+                    isWatchMode: activeTerminalId.flatMap { terminals[$0]?.mode.isWatch } ?? false,
+                    onEnableEditing: {
+                        if let tid = activeTerminalId, let t = terminals[tid] {
+                            t.setReadOnly(false)
+                        }
                     }
-                })
+                )
             }
         }
         .background(BG_DARKEST.opacity(settings.translucentBackground ? 0 : 1))
@@ -468,9 +490,12 @@ struct ContentView: View {
                 statusBadge(label: "spent", value: fmtCost(manager.totalCost), tint: Color.orange)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
-        .background(BG_DARK.opacity(settings.translucentBackground ? 0.35 : 1))
+        // Leave 76pt for traffic lights (since hiddenTitleBar overlays them on content).
+        .padding(.leading, 76)
+        .padding(.trailing, 14)
+        .padding(.vertical, 9)
+        // Most opaque layer — anchors the window visually.
+        .background(BG_DARKEST.opacity(settings.translucentBackground ? 0.78 : 1))
     }
 
     private func statusBadge(label: String, value: String, tint: Color) -> some View {
@@ -524,10 +549,16 @@ struct ContentView: View {
                 Button {
                     NotificationCenter.default.post(name: .toggleSidebar, object: nil)
                 } label: {
-                    Image(systemName: sidebarCollapsed ? "sidebar.right" : "sidebar.right.fill")
+                    // Use the same symbol for both states — `.fill` variant doesn't
+                    // exist on every macOS version and was rendering blank.
+                    // The active state is conveyed by tint and background.
+                    Image(systemName: "sidebar.right")
                         .font(.system(size: 12, weight: .semibold))
                         .frame(width: 26, height: 26)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.04)))
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(sidebarCollapsed ? Color.white.opacity(0.04) : GOLD.opacity(0.18))
+                        )
                         .foregroundColor(sidebarCollapsed ? TEXT_DIM : GOLD)
                 }
                 .buttonStyle(.plain)
@@ -541,13 +572,14 @@ struct ContentView: View {
     }
 
     private func nameForTerminal(_ t: TerminalSession) -> String {
-        if case .claude(let resumeId) = t.mode, let rid = resumeId,
-           let session = manager.sessions.first(where: { $0.sessionId == rid }) {
+        if let sid = t.mode.sessionId,
+           let session = manager.sessions.first(where: { $0.sessionId == sid }) {
             return session.name
         }
         switch t.mode {
         case .shell: return "shell"
         case .claude: return "claude"
+        case .watch(let sid): return "watch \(sid.prefix(6))"
         }
     }
 
@@ -569,32 +601,35 @@ struct ContentView: View {
     }
 
     private func terminalToolbar(for id: String, terminal: TerminalSession) -> some View {
-        let session: SessionInfo? = {
-            if case .claude(let rid) = terminal.mode, let rid {
-                return manager.sessions.first { $0.sessionId == rid }
-            }
-            return nil
-        }()
-        let modeLabel: String = {
-            switch terminal.mode {
-            case .shell: return "shell"
-            case .claude: return "claude"
-            }
-        }()
+        let session = terminal.mode.sessionId.flatMap { sid in
+            manager.sessions.first { $0.sessionId == sid }
+        }
+        let isWatch = terminal.mode.isWatch
         return HStack(spacing: 10) {
-            Circle().fill(GOLD).frame(width: 6, height: 6)
+            Circle().fill(isWatch ? Color.green : GOLD).frame(width: 6, height: 6)
             Text(session?.name ?? "Terminal")
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                 .foregroundColor(TEXT_PRIMARY)
                 .lineLimit(1)
-            Text(modeLabel)
+            Text(terminal.mode.label)
                 .font(.system(size: 9, weight: .bold))
                 .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(Capsule().fill(GOLD.opacity(0.15)))
-                .foregroundColor(GOLD)
+                .background(Capsule().fill((isWatch ? Color.green : GOLD).opacity(0.15)))
+                .foregroundColor(isWatch ? Color.green : GOLD)
 
-            ReadOnlyToggle(terminal: terminal)
-            CdFolderButton(terminal: terminal)
+            if isWatch {
+                HStack(spacing: 4) {
+                    Image(systemName: "eye.fill").font(.system(size: 9))
+                    Text("Watching live · read-only")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundColor(Color.green.opacity(0.85))
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(Capsule().fill(Color.green.opacity(0.12)))
+            } else {
+                ReadOnlyToggle(terminal: terminal)
+                CdFolderButton(terminal: terminal)
+            }
 
             Spacer()
             if let s = session {
@@ -690,22 +725,46 @@ struct ContentView: View {
             existing.activate()
             return
         }
-        let terminal = TerminalSession(mode: .claude(resumeId: session.sessionId), cwd: session.cwd)
+        // Fresh liveness check at click time — `session.isAlive` is from polling
+        // and might be a few seconds stale. Reading sessions/ directly here
+        // ensures we never accidentally fork an active session.
+        let liveNow = Self.isSessionAliveExternally(sessionId: session.sessionId)
+        let mode: SessionMode = (session.isAlive || liveNow)
+            ? .watch(sessionId: session.sessionId)
+            : .claude(resumeId: session.sessionId)
+        let terminal = TerminalSession(mode: mode, cwd: session.cwd)
         terminals[session.id] = terminal
         orderedTerminalIds.append(session.id)
         activeTerminalId = session.id
         terminal.activate()
     }
 
+    /// Re-checks ~/.claude/sessions/ at click time so a stale poll snapshot
+    /// can't trick us into resuming a session that's actually still running.
+    private static func isSessionAliveExternally(sessionId: String) -> Bool {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/sessions")
+        guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else {
+            return false
+        }
+        for file in files where file.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: file),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let sid = obj["sessionId"] as? String,
+                  sid == sessionId else { continue }
+            let pid = obj["pid"] as? Int ?? Int(file.deletingPathExtension().lastPathComponent) ?? 0
+            if kill(Int32(pid), 0) == 0 { return true }
+        }
+        return false
+    }
+
     private func deleteEmptySessions() {
         // Close any tabs whose sessions had 0 user messages — heuristic for "never used".
         let toClose = terminals.values.compactMap { t -> String? in
-            if case .claude(let rid) = t.mode, let rid {
-                if let s = manager.sessions.first(where: { $0.sessionId == rid }), s.usage.messageCount == 0 {
-                    return t.id
-                }
-            }
-            return nil
+            guard let sid = t.mode.sessionId,
+                  let s = manager.sessions.first(where: { $0.sessionId == sid }),
+                  s.usage.messageCount == 0 else { return nil }
+            return t.id
         }
         for id in toClose { closeTerminal(id) }
     }
@@ -733,6 +792,7 @@ struct IsolatedTerminalView: View {
 
 struct ReadOnlyToastOverlay: View {
     let activeTerminalId: String?
+    let isWatchMode: Bool
     let onEnableEditing: () -> Void
     @State private var center = ReadOnlyToastCenter.shared
 
@@ -740,23 +800,27 @@ struct ReadOnlyToastOverlay: View {
         VStack {
             if let tid = activeTerminalId, center.visibleSessionId == tid {
                 HStack(spacing: 10) {
-                    Image(systemName: "lock.fill")
+                    Image(systemName: isWatchMode ? "eye.fill" : "lock.fill")
                         .font(.system(size: 12))
-                        .foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.10))
-                    Text("Read-only mode")
+                        .foregroundColor(isWatchMode ? Color.green : Color(red: 1.0, green: 0.78, blue: 0.10))
+                    Text(isWatchMode ? "Watching live" : "Read-only mode")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.white)
                     Text("·")
                         .foregroundColor(.white.opacity(0.3))
-                    Text("Press ⌘E or click to enable editing")
+                    Text(isWatchMode
+                         ? "This session is running elsewhere — input is disabled to keep it intact"
+                         : "Press ⌘E or click to enable editing")
                         .font(.system(size: 11))
                         .foregroundColor(.white.opacity(0.7))
-                    Button("Enable") { onEnableEditing() }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: .semibold))
-                        .padding(.horizontal, 10).padding(.vertical, 4)
-                        .background(Capsule().fill(Color(red: 1.0, green: 0.78, blue: 0.10).opacity(0.2)))
-                        .foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.10))
+                    if !isWatchMode {
+                        Button("Enable") { onEnableEditing() }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11, weight: .semibold))
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(Capsule().fill(Color(red: 1.0, green: 0.78, blue: 0.10).opacity(0.2)))
+                            .foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.10))
+                    }
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(
@@ -1163,6 +1227,7 @@ struct TabChip: View {
         switch terminal.mode {
         case .shell: return "terminal"
         case .claude: return "sparkles"
+        case .watch: return "eye"
         }
     }
 
@@ -1599,6 +1664,54 @@ struct ModelBadge: View {
                 .background(Capsule().fill(f.color.opacity(dimmed ? 0.1 : 0.18)))
                 .foregroundColor(f.color.opacity(dimmed ? 0.5 : 0.95))
         }
+    }
+}
+
+enum ModelFamilyFilter: String, CaseIterable, Hashable {
+    case all, opus, sonnet, haiku
+
+    var label: String {
+        switch self {
+        case .all: return "All"
+        case .opus: return "Opus"
+        case .sonnet: return "Sonnet"
+        case .haiku: return "Haiku"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .all: return Color(red: 1.0, green: 0.78, blue: 0.10)
+        case .opus: return Color(red: 1.0, green: 0.78, blue: 0.10)
+        case .sonnet: return Color(red: 0.40, green: 0.80, blue: 1.0)
+        case .haiku: return Color(red: 0.75, green: 0.55, blue: 1.0)
+        }
+    }
+
+    func matches(_ model: String?) -> Bool {
+        guard self != .all else { return true }
+        guard let m = model?.lowercased() else { return false }
+        return m.contains(self.rawValue)
+    }
+}
+
+struct ModelFilterChip: View {
+    let filter: ModelFamilyFilter
+    let isOn: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(filter.label)
+                .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                .tracking(0.4)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(
+                    Capsule().fill(isOn ? filter.color.opacity(0.22) : Color.white.opacity(0.04))
+                )
+                .foregroundColor(isOn ? filter.color : .white.opacity(0.45))
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -4,6 +4,31 @@ import SwiftTerm
 enum SessionMode {
     case shell
     case claude(resumeId: String?)
+    /// Tail an existing session's JSONL — used when the session is alive
+    /// elsewhere and we don't want to fork it via `claude --resume`.
+    case watch(sessionId: String)
+
+    var isWatch: Bool {
+        if case .watch = self { return true }
+        return false
+    }
+
+    /// The Claude session ID this terminal is bound to, if any.
+    var sessionId: String? {
+        switch self {
+        case .shell: return nil
+        case .claude(let rid): return rid
+        case .watch(let sid): return sid
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .shell: return "shell"
+        case .claude: return "claude"
+        case .watch: return "watch"
+        }
+    }
 }
 
 /// Singleton broker for the "you're read-only" toast.
@@ -106,8 +131,11 @@ final class TerminalSession: @unchecked Sendable {
     init(mode: SessionMode = .shell, cwd: String? = nil) {
         self.mode = mode
         self.id = {
-            if case .claude(let rid) = mode, let rid { return rid }
-            return UUID().uuidString
+            switch mode {
+            case .claude(let rid): return rid ?? UUID().uuidString
+            case .watch(let sid): return sid
+            case .shell: return UUID().uuidString
+            }
         }()
         self.cwd = cwd ?? FileManager.default.homeDirectoryForCurrentUser.path
 
@@ -130,6 +158,17 @@ final class TerminalSession: @unchecked Sendable {
             var args = [String]()
             if let rid = resumeId { args = ["--resume", rid] }
             terminalView.startProcess(executable: claudePath, args: args, environment: env, execName: "claude", currentDirectory: self.cwd)
+        case .watch(let sessionId):
+            // Read-only and locked — there's no claude process to send input to.
+            self.isReadOnly = true
+            let scriptPath = TerminalSession.ensureWatcherScript()
+            terminalView.startProcess(
+                executable: "/usr/bin/env",
+                args: ["python3", "-u", scriptPath, sessionId],
+                environment: env,
+                execName: "watch-\(sessionId.prefix(8))",
+                currentDirectory: self.cwd
+            )
         }
         isRunning = true
     }
@@ -139,6 +178,8 @@ final class TerminalSession: @unchecked Sendable {
     }
 
     func toggleReadOnly() {
+        // Watch mode is permanently read-only — there's no live process to send to.
+        if mode.isWatch { return }
         setReadOnly(!isReadOnly)
     }
 
@@ -178,13 +219,23 @@ final class TerminalSession: @unchecked Sendable {
             ?? NSFont(name: "SF Mono", size: AppSettings.shared.fontSize)
             ?? NSFont.monospacedSystemFont(ofSize: AppSettings.shared.fontSize, weight: .regular)
         terminal.nativeForegroundColor = theme.foreground
-        // Translucent: 30% theme tint so window vibrancy shows through clearly.
+        // Translucent: cells render with low alpha so vibrancy shows through.
         // Opaque: full theme background.
         terminal.nativeBackgroundColor = translucent
-            ? theme.background.withAlphaComponent(0.30)
+            ? theme.background.withAlphaComponent(0.18)
             : theme.background
         terminal.caretColor = theme.primary
         terminal.selectedTextBackgroundColor = theme.primary.withAlphaComponent(0.3)
+
+        // SwiftTerm initialises `layer.backgroundColor` from `nativeBackgroundColor`
+        // ONCE in `setupOptions()`, then never reads it again — even if you change
+        // `nativeBackgroundColor` later, the layer stays at the original opaque color.
+        // For glass-effect translucency we must override the layer ourselves so cell
+        // fills (which now have alpha) blend onto the NSVisualEffectView underneath.
+        terminal.wantsLayer = true
+        terminal.layer?.backgroundColor = translucent
+            ? NSColor.clear.cgColor
+            : theme.background.cgColor
     }
 
     private func buildEnv() -> [String] {
@@ -194,6 +245,27 @@ final class TerminalSession: @unchecked Sendable {
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
         env["MINIONSCODE"] = "1"
         return env.map { "\($0.key)=\($0.value)" }
+    }
+
+    /// Drops a small Python tail-watcher into ~/.minionscode/ on first call and
+    /// returns its path. Re-runs of the app overwrite if the embedded script
+    /// changed (compared by content), so updates ship with the binary.
+    static func ensureWatcherScript() -> String {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".minionscode")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let target = dir.appendingPathComponent("watch_session.py")
+        let bytes = Data(watcherSource.utf8)
+        let existing = try? Data(contentsOf: target)
+        if existing != bytes {
+            try? bytes.write(to: target)
+            // chmod +x
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: target.path
+            )
+        }
+        return target.path
     }
 
     private func findClaude() -> String {
@@ -207,3 +279,182 @@ final class TerminalSession: @unchecked Sendable {
         return "/opt/homebrew/bin/claude"
     }
 }
+
+/// Embedded Python source — written to ~/.minionscode/watch_session.py on first
+/// watch tab open. Tails the JSONL for a session and pretty-prints turns.
+private let watcherSource = #"""
+#!/usr/bin/env python3
+"""Tail a Claude Code session JSONL and pretty-print turns in real time.
+
+Usage: watch_session.py <sessionId>
+
+Locates ~/.claude/projects/*/<sessionId>.jsonl, follows it like `tail -f`,
+and emits ANSI-colored output for user / assistant / tool / system events.
+Read-only by design: this never writes to the JSONL or talks to the running
+claude process, so it cannot disturb the live session.
+"""
+import os, sys, json, time, glob, signal
+
+GOLD    = "\x1b[38;2;255;199;26m"
+SKY     = "\x1b[38;2;102;204;255m"
+LAVEND  = "\x1b[38;2;192;141;255m"
+GREEN   = "\x1b[38;2;120;220;140m"
+RED     = "\x1b[38;2;255;110;110m"
+GREY    = "\x1b[38;2;130;130;140m"
+DIM     = "\x1b[2m"
+BOLD    = "\x1b[1m"
+RESET   = "\x1b[0m"
+CLEAR   = "\x1b[2J\x1b[H"
+
+def find_jsonl(session_id):
+    home = os.path.expanduser("~")
+    pattern = os.path.join(home, ".claude", "projects", "*", f"{session_id}.jsonl")
+    matches = glob.glob(pattern)
+    if not matches:
+        return None
+    matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return matches[0]
+
+def fmt_time(ts):
+    if not ts: return ""
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).strftime("%H:%M:%S")
+    except Exception:
+        return ""
+
+def shorten(s, n=4000):
+    s = (s or "").rstrip()
+    return s if len(s) <= n else s[:n] + f"{DIM}…[+{len(s)-n} chars]{RESET}"
+
+def render_user(msg, ts):
+    content = msg.get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts = []
+        for c in content:
+            if c.get("type") == "text":
+                parts.append(c.get("text", ""))
+            elif c.get("type") == "tool_result":
+                tid = c.get("tool_use_id", "")[:8]
+                payload = c.get("content")
+                if isinstance(payload, list):
+                    payload = "\n".join(p.get("text", "") for p in payload if p.get("type") == "text")
+                parts.append(f"{DIM}[tool_result {tid}]{RESET}\n{shorten(str(payload), 1200)}")
+            else:
+                parts.append(f"{DIM}[{c.get('type','?')}]{RESET}")
+        text = "\n".join(parts)
+    else:
+        text = str(content or "")
+    if text.strip():
+        print(f"\n{SKY}{BOLD}USER{RESET} {DIM}{fmt_time(ts)}{RESET}")
+        print(shorten(text))
+
+def render_assistant(msg, ts):
+    content = msg.get("content")
+    model = msg.get("model", "")
+    family = "OPUS" if "opus" in model.lower() else ("SONNET" if "sonnet" in model.lower() else ("HAIKU" if "haiku" in model.lower() else "?"))
+    color = GOLD if family == "OPUS" else (SKY if family == "SONNET" else (LAVEND if family == "HAIKU" else GREY))
+    if not isinstance(content, list):
+        return
+    head = False
+    for c in content:
+        if c.get("type") == "text":
+            if not head:
+                print(f"\n{color}{BOLD}{family}{RESET} {DIM}{fmt_time(ts)}{RESET}")
+                head = True
+            print(shorten(c.get("text", "")))
+        elif c.get("type") == "tool_use":
+            name = c.get("name", "?")
+            tid = c.get("id", "")[:8]
+            inp = c.get("input", {})
+            try:
+                preview = json.dumps(inp, ensure_ascii=False)[:200]
+            except Exception:
+                preview = str(inp)[:200]
+            if not head:
+                print(f"\n{color}{BOLD}{family}{RESET} {DIM}{fmt_time(ts)}{RESET}")
+                head = True
+            print(f"  {GREEN}↳ {name}{RESET} {DIM}{tid} {preview}{RESET}")
+        elif c.get("type") == "thinking":
+            if not head:
+                print(f"\n{color}{BOLD}{family}{RESET} {DIM}{fmt_time(ts)}{RESET}")
+                head = True
+            print(f"  {DIM}[thinking…]{RESET}")
+
+def render(line):
+    try:
+        obj = json.loads(line)
+    except Exception:
+        return
+    t = obj.get("type")
+    ts = obj.get("timestamp")
+    if obj.get("isSidechain"):
+        return  # skip sub-agent chatter
+    if t == "user":
+        render_user(obj.get("message", {}), ts)
+    elif t == "assistant":
+        render_assistant(obj.get("message", {}), ts)
+    elif t == "summary":
+        print(f"\n{GREY}{DIM}── summary: {shorten(str(obj.get('summary','')), 200)} ──{RESET}")
+
+def header(session_id, path):
+    print(f"{CLEAR}{GOLD}{BOLD}─── Watching session {session_id[:8]}… ───{RESET}")
+    print(f"{DIM}File: {path}{RESET}")
+    print(f"{DIM}Read-only — input is disabled. Updates appear live as the session writes.{RESET}\n")
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: watch_session.py <sessionId>")
+        sys.exit(1)
+    session_id = sys.argv[1]
+    path = find_jsonl(session_id)
+    if not path:
+        print(f"{RED}No JSONL found for session {session_id}{RESET}")
+        time.sleep(2)
+        sys.exit(1)
+    header(session_id, path)
+
+    # Print backlog (last ~80 turns) so the user has context.
+    backlog = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            backlog.append(line)
+    for line in backlog[-160:]:
+        render(line)
+    print(f"\n{GREY}{DIM}── waiting for new events ──{RESET}", flush=True)
+
+    # Tail loop
+    inode = os.stat(path).st_ino
+    pos = os.path.getsize(path)
+    try:
+        while True:
+            try:
+                st = os.stat(path)
+                if st.st_ino != inode:
+                    # File rotated — reopen from start.
+                    inode = st.st_ino
+                    pos = 0
+                size = st.st_size
+                if size < pos:
+                    pos = 0
+                if size > pos:
+                    with open(path, "r", encoding="utf-8", errors="replace") as f:
+                        f.seek(pos)
+                        chunk = f.read(size - pos)
+                        pos = size
+                    for line in chunk.splitlines():
+                        if line.strip():
+                            render(line)
+                    sys.stdout.flush()
+            except FileNotFoundError:
+                pass
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    main()
+"""#
