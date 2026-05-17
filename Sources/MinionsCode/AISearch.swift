@@ -6,6 +6,55 @@ struct AISearchResult: Sendable {
 }
 
 enum AISearch {
+    /// Suggest a short, evocative session name from a JSONL snippet.
+    /// Returns nil if Haiku is unavailable or returns garbage.
+    static func suggestName(forSnippet snippet: String) async -> String? {
+        let claudePath = findClaude()
+        guard FileManager.default.isExecutableFile(atPath: claudePath) else { return nil }
+
+        let prompt = """
+        Read this Claude Code session snippet and propose a short session name (max 5 words, no quotes, no period). Capture the topic concretely. Reply with ONLY the name, no prose.
+
+        \(snippet)
+        """
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: claudePath)
+        process.arguments = ["--print", "--model", "haiku"]
+        let inputPipe = Pipe()
+        let outputPipe = Pipe()
+        process.standardInput = inputPipe
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            try inputPipe.fileHandleForWriting.write(contentsOf: prompt.data(using: .utf8) ?? Data())
+            try inputPipe.fileHandleForWriting.close()
+
+            let timeoutTask = Task {
+                try? await Task.sleep(for: .seconds(45))
+                if process.isRunning { process.terminate() }
+            }
+            let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            timeoutTask.cancel()
+
+            guard let raw = String(data: data, encoding: .utf8) else { return nil }
+            let cleaned = raw
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\"", with: "")
+                .replacingOccurrences(of: "'", with: "")
+            // Reject if obviously failed
+            if cleaned.isEmpty || cleaned.contains("\n\n") || cleaned.count > 80 || cleaned.lowercased().contains("error") {
+                return nil
+            }
+            return cleaned
+        } catch {
+            return nil
+        }
+    }
+
     static func run(query: String, sessions: [[String: String]]) async -> AISearchResult {
         let claudePath = findClaude()
         guard FileManager.default.isExecutableFile(atPath: claudePath) else {

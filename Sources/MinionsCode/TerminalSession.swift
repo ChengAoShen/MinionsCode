@@ -178,8 +178,10 @@ final class TerminalSession: @unchecked Sendable {
             ?? NSFont(name: "SF Mono", size: AppSettings.shared.fontSize)
             ?? NSFont.monospacedSystemFont(ofSize: AppSettings.shared.fontSize, weight: .regular)
         terminal.nativeForegroundColor = theme.foreground
+        // Translucent: 30% theme tint so window vibrancy shows through clearly.
+        // Opaque: full theme background.
         terminal.nativeBackgroundColor = translucent
-            ? theme.background.withAlphaComponent(0.55)
+            ? theme.background.withAlphaComponent(0.30)
             : theme.background
         terminal.caretColor = theme.primary
         terminal.selectedTextBackgroundColor = theme.primary.withAlphaComponent(0.3)

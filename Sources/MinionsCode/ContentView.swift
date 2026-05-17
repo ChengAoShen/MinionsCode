@@ -49,8 +49,10 @@ struct ContentView: View {
             ZStack {
                 if settings.translucentBackground {
                     VisualEffectBackground(material: .hudWindow, blendingMode: .behindWindow)
+                    BG_DARKEST.opacity(0.20)
+                } else {
+                    BG_DARKEST
                 }
-                BG_DARKEST.opacity(settings.translucentBackground ? 0.30 : 1)
             }
         )
         .preferredColorScheme(.dark)
@@ -163,7 +165,7 @@ struct ContentView: View {
             Divider().background(Color.white.opacity(0.05))
             sidebarFooter
         }
-        .background(BG_DARK.opacity(settings.translucentBackground ? 0.45 : 1))
+        .background(BG_DARK.opacity(settings.translucentBackground ? 0.35 : 1))
     }
 
     private var filterBar: some View {
@@ -287,6 +289,20 @@ struct ContentView: View {
                     if n > 0 { manager.scan() }
                 }
                 Button("Delete empty tabs") { deleteEmptySessions() }
+                Divider()
+                Button("Auto-name unnamed Opus sessions") {
+                    Task {
+                        await manager.autoNameUnnamedSessions { s in
+                            (s.model?.lowercased().contains("opus")) ?? false
+                        }
+                    }
+                }
+                Button("Auto-name all unnamed sessions") {
+                    Task {
+                        await manager.autoNameUnnamedSessions()
+                    }
+                }
+                Divider()
                 Button("Refresh now") { manager.scan() }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -454,7 +470,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
-        .background(BG_DARK.opacity(settings.translucentBackground ? 0.4 : 1))
+        .background(BG_DARK.opacity(settings.translucentBackground ? 0.35 : 1))
     }
 
     private func statusBadge(label: String, value: String, tint: Color) -> some View {
@@ -521,7 +537,7 @@ struct ContentView: View {
             .padding(.trailing, 8)
         }
         .frame(height: 38)
-        .background(BG_DARK.opacity(settings.translucentBackground ? 0.4 : 1))
+        .background(BG_DARK.opacity(settings.translucentBackground ? 0.35 : 1))
     }
 
     private func nameForTerminal(_ t: TerminalSession) -> String {
@@ -591,7 +607,7 @@ struct ContentView: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
-        .background(BG_DARK.opacity(settings.translucentBackground ? 0.4 : 1))
+        .background(BG_DARK.opacity(settings.translucentBackground ? 0.35 : 1))
     }
 
     private var emptyState: some View {
@@ -1388,19 +1404,12 @@ struct SessionCard: View {
                         .lineLimit(1)
                 }
                 Spacer()
+                ModelBadge(model: session.model, dimmed: dimmed)
                 Text(fmtCost(session.cost))
                     .scaledFont(10, weight: .bold, design: .monospaced)
                     .foregroundColor(dimmed ? .orange.opacity(0.5) : .orange.opacity(0.85))
             }
             HStack(spacing: 8) {
-                if let model = session.model {
-                    Text(model.replacingOccurrences(of: "claude-", with: "")
-                            .replacingOccurrences(of: "opus-4-7", with: "opus")
-                            .replacingOccurrences(of: "opus-4.7", with: "opus")
-                            .replacingOccurrences(of: "sonnet-4-6", with: "sonnet")
-                            .replacingOccurrences(of: "haiku-4-5", with: "haiku"))
-                        .foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.10).opacity(dimmed ? 0.4 : 0.7))
-                }
                 Text("\(session.usage.messageCount)msg")
                 if let last = session.lastActivityAt {
                     Text(relativeTime(last))
@@ -1566,6 +1575,30 @@ struct ScaledFontModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content.font(.system(size: size * scale, weight: weight, design: design))
+    }
+}
+
+struct ModelBadge: View {
+    let model: String?
+    let dimmed: Bool
+
+    private var family: (label: String, color: Color)? {
+        guard let m = model?.lowercased() else { return nil }
+        if m.contains("opus") { return ("OPUS", Color(red: 1.0, green: 0.78, blue: 0.10)) }
+        if m.contains("sonnet") { return ("SONNET", Color(red: 0.40, green: 0.80, blue: 1.0)) }
+        if m.contains("haiku") { return ("HAIKU", Color(red: 0.75, green: 0.55, blue: 1.0)) }
+        return ("?", .gray)
+    }
+
+    var body: some View {
+        if let f = family {
+            Text(f.label)
+                .font(.system(size: 8, weight: .heavy, design: .monospaced))
+                .tracking(0.5)
+                .padding(.horizontal, 5).padding(.vertical, 2)
+                .background(Capsule().fill(f.color.opacity(dimmed ? 0.1 : 0.18)))
+                .foregroundColor(f.color.opacity(dimmed ? 0.5 : 0.95))
+        }
     }
 }
 

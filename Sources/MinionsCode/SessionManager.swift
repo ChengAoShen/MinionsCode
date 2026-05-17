@@ -1,5 +1,9 @@
 import Foundation
 
+extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
 /// Snapshot of a parsed JSONL: sticky cache so we don't re-parse unchanged files every poll tick.
 struct JsonlCache: Sendable {
     var fingerprint: String  // "size:mtime" combo
@@ -48,33 +52,35 @@ final class SessionManager {
         }
     }
 
-    /// Two-phase scan:
-    /// - Phase 1 (sync, instant): live sessions only — populates immediately so the
-    ///   sidebar has something to show when expanded.
-    /// - Phase 2 (async, background): history within `historyDays` (default = setting),
-    ///   merged into sessions when ready. Cached files skip re-parsing on subsequent runs.
+    /// Two-phase scan, both async:
+    /// - Phase 1 (background, fast): live PIDs + stat-only recent JSONLs.
+    ///   Posts results to main as soon as they're ready (~100-300ms).
+    /// - Phase 2 (background, slower): full history within horizon.
+    ///   Merged when ready, marked complete via isLoadingHistory.
     func scan(historyDays: Int? = nil) {
         let snapshotNames = customNames
         let claudeDir = self.claudeDir
         let days = historyDays ?? AppSettings.shared.historyHorizonDays
 
-        // Phase 1: live sessions sync.
-        let livesOnly = Self.scanLiveOnly(claudeDir: claudeDir, customNames: snapshotNames)
-        // Merge live sessions into the existing list — keep history that may already be loaded.
-        var working = sessions.filter { !$0.isAlive }   // strip prior live entries
-        let liveIds = Set(livesOnly.map(\.id))
-        working.removeAll { liveIds.contains($0.id) }   // also strip historical duplicates of new live
-        working.append(contentsOf: livesOnly)
-        sessions = Self.applySort(working)
-        NotificationManager.shared.observe(sessions: sessions)
-
-        // Phase 2: history async.
         isLoadingHistory = true
-        Task.detached(priority: .utility) {
+
+        Task.detached(priority: .userInitiated) {
+            // Phase 1
+            let livesOnly = Self.scanLiveOnly(claudeDir: claudeDir, customNames: snapshotNames)
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                var working = self.sessions.filter { !$0.isAlive }
+                let liveIds = Set(livesOnly.map(\.id))
+                working.removeAll { liveIds.contains($0.id) }
+                working.append(contentsOf: livesOnly)
+                self.sessions = Self.applySort(working)
+                NotificationManager.shared.observe(sessions: self.sessions)
+            }
+
+            // Phase 2
             let history = Self.scanHistory(claudeDir: claudeDir, customNames: snapshotNames, days: days)
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
-                // Merge history with existing live sessions.
                 let liveSet = Set(self.sessions.filter(\.isAlive).map(\.id))
                 var merged = self.sessions.filter(\.isAlive)
                 for entry in history where !liveSet.contains(entry.id) {
@@ -321,9 +327,54 @@ final class SessionManager {
         }
     }
 
-    /// Delete junk JSONL files: ones with cwd in a tmp folder, or with zero
-    /// non-sidechain messages. Doesn't touch live sessions or files we cannot
-    /// stat. Returns the count deleted.
+    /// Auto-name unnamed sessions via Haiku one-shot. "Unnamed" = the displayed name
+    /// equals the cwd shortPath (i.e., no AI title and no custom override).
+    /// Limited to a max of 12 sessions per call to avoid runaway cost.
+    func autoNameUnnamedSessions(filter: (SessionInfo) -> Bool = { _ in true }, maxCount: Int = 12) async {
+        let candidates = sessions.filter { s in
+            let isUnnamed = s.name == Self.shortPathStatic(s.cwd)
+            return isUnnamed && s.usage.messageCount > 0 && filter(s)
+        }.prefix(maxCount)
+
+        for session in candidates {
+            // Sample a snippet of the JSONL for context
+            guard let snippet = await Self.sampleSession(sessionId: session.sessionId, projectsDir: claudeDir.appendingPathComponent("projects")) else { continue }
+            let suggested = await AISearch.suggestName(forSnippet: snippet)
+            if let name = suggested, !name.isEmpty {
+                renameSession(session.id, to: name)
+            }
+        }
+    }
+
+    nonisolated static func sampleSession(sessionId: String, projectsDir: URL) async -> String? {
+        guard let projects = try? FileManager.default.contentsOfDirectory(at: projectsDir, includingPropertiesForKeys: nil) else { return nil }
+        for project in projects {
+            let url = project.appendingPathComponent("\(sessionId).jsonl")
+            guard FileManager.default.fileExists(atPath: url.path),
+                  let content = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            // Take first user message + first assistant text snippet — usually enough to name a session.
+            var pieces: [String] = []
+            for line in content.components(separatedBy: .newlines) where !line.isEmpty {
+                guard let data = line.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                if obj["type"] as? String == "user", let msg = obj["message"] as? [String: Any] {
+                    if let s = msg["content"] as? String { pieces.append("USER: " + String(s.prefix(400))) }
+                    else if let arr = msg["content"] as? [[String: Any]],
+                            let first = arr.first(where: { $0["type"] as? String == "text" }),
+                            let s = first["text"] as? String { pieces.append("USER: " + String(s.prefix(400))) }
+                }
+                if obj["type"] as? String == "assistant", let msg = obj["message"] as? [String: Any],
+                   let arr = msg["content"] as? [[String: Any]],
+                   let first = arr.first(where: { $0["type"] as? String == "text" }),
+                   let s = first["text"] as? String {
+                    pieces.append("ASSISTANT: " + String(s.prefix(400)))
+                }
+                if pieces.count >= 4 { break }
+            }
+            return pieces.joined(separator: "\n\n").nilIfEmpty
+        }
+        return nil
+    }
     @discardableResult
     func deleteJunkSessions() -> Int {
         let projectsDir = claudeDir.appendingPathComponent("projects")
