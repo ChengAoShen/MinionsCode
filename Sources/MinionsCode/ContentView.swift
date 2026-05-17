@@ -21,13 +21,27 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var aiSearchHint: String?
     @State private var aiSearching = false
+    @State private var sidebarCollapsed = true
+    @State private var sidebarWidth: CGFloat = 320
+    @State private var orderedTerminalIds: [String] = []
+
+    private var sidebarTargetWidth: CGFloat {
+        sidebarCollapsed ? 0 : sidebarWidth
+    }
 
     var body: some View {
         HStack(spacing: 0) {
-            sidebar
-                .frame(width: 290 + (settings.fontSize - 13) * 6)
-            Divider().background(Color.white.opacity(0.05))
+            // Terminal panel takes priority — fills available space
             terminalPanel
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if !sidebarCollapsed {
+                Divider().background(Color.white.opacity(0.05))
+                SidebarResizer(width: $sidebarWidth)
+                sidebar
+                    .frame(width: sidebarWidth)
+                    .transition(.move(edge: .trailing))
+            }
         }
         .background(BG_DARKEST)
         .preferredColorScheme(.dark)
@@ -35,9 +49,23 @@ struct ContentView: View {
         .onAppear {
             manager.startPolling()
             NSApp.activate(ignoringOtherApps: true)
+            if terminals.isEmpty { newShellSession() }
+        }
+        .onChange(of: settings.theme) { _, _ in
+            for t in terminals.values {
+                TerminalSession.applyDefaultTheme(to: t.terminalView)
+            }
+        }
+        .onChange(of: settings.fontSize) { _, _ in
+            for t in terminals.values {
+                TerminalSession.applyDefaultTheme(to: t.terminalView)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .newSession)) { _ in
             newShellSession()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) { sidebarCollapsed.toggle() }
         }
         .sheet(isPresented: $showingSettings) {
             SettingsSheet(isPresented: $showingSettings)
@@ -152,6 +180,18 @@ struct ContentView: View {
                 .foregroundColor(TEXT_PRIMARY)
                 .tracking(0.3)
             Spacer()
+            Menu {
+                Button("Delete empty sessions") { deleteEmptySessions() }
+                Button("Refresh now") { manager.scan() }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 13))
+                    .foregroundColor(TEXT_DIM)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+
             Button(action: newShellSession) {
                 Image(systemName: "plus.circle.fill")
                     .font(.system(size: 16, weight: .semibold))
@@ -264,7 +304,12 @@ struct ContentView: View {
                                 terminal: terminal,
                                 sessionName: nameForTerminal(terminal),
                                 isActive: activeTerminalId == tid,
-                                onSelect: { activeTerminalId = tid },
+                                onSelect: {
+                                    if activeTerminalId != tid {
+                                        activeTerminalId = tid
+                                        terminal.activate()
+                                    }
+                                },
                                 onClose: { closeTerminal(tid) }
                             )
                         }
@@ -284,14 +329,25 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .help("New shell tab (⌘T)")
                 .keyboardShortcut("t")
+
+                Button {
+                    NotificationCenter.default.post(name: .toggleSidebar, object: nil)
+                } label: {
+                    Image(systemName: sidebarCollapsed ? "sidebar.right" : "sidebar.right.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 26, height: 26)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.04)))
+                        .foregroundColor(sidebarCollapsed ? TEXT_DIM : GOLD)
+                }
+                .buttonStyle(.plain)
+                .help(sidebarCollapsed ? "Show Claude sessions panel (⌘\\)" : "Hide panel (⌘\\)")
+                .keyboardShortcut("\\")
             }
             .padding(.trailing, 8)
         }
         .frame(height: 38)
         .background(BG_DARK)
     }
-
-    @State private var orderedTerminalIds: [String] = []
 
     private func nameForTerminal(_ t: TerminalSession) -> String {
         if case .claude(let resumeId) = t.mode, let rid = resumeId,
@@ -408,6 +464,7 @@ struct ContentView: View {
         terminals[terminal.id] = terminal
         orderedTerminalIds.append(terminal.id)
         activeTerminalId = terminal.id
+        terminal.activate()
     }
 
     private func newClaudeSession() {
@@ -415,25 +472,42 @@ struct ContentView: View {
         terminals[terminal.id] = terminal
         orderedTerminalIds.append(terminal.id)
         activeTerminalId = terminal.id
+        terminal.activate()
     }
 
     private func selectSession(_ session: SessionInfo) {
-        if terminals[session.id] != nil {
+        if let existing = terminals[session.id] {
             activeTerminalId = session.id
+            existing.activate()
         } else {
             resumeSession(session)
         }
     }
 
     private func resumeSession(_ session: SessionInfo) {
-        if terminals[session.id] != nil {
+        if let existing = terminals[session.id] {
             activeTerminalId = session.id
+            existing.activate()
             return
         }
         let terminal = TerminalSession(mode: .claude(resumeId: session.sessionId), cwd: session.cwd)
         terminals[session.id] = terminal
         orderedTerminalIds.append(session.id)
         activeTerminalId = session.id
+        terminal.activate()
+    }
+
+    private func deleteEmptySessions() {
+        // Close any tabs whose sessions had 0 user messages — heuristic for "never used".
+        let toClose = terminals.values.compactMap { t -> String? in
+            if case .claude(let rid) = t.mode, let rid {
+                if let s = manager.sessions.first(where: { $0.sessionId == rid }), s.usage.messageCount == 0 {
+                    return t.id
+                }
+            }
+            return nil
+        }
+        for id in toClose { closeTerminal(id) }
     }
 
     private func startRename(_ session: SessionInfo) {
@@ -883,6 +957,36 @@ struct ScaledFontModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content.font(.system(size: size * scale, weight: weight, design: design))
+    }
+}
+
+struct SidebarResizer: View {
+    @Binding var width: CGFloat
+    @State private var dragStart: CGFloat = 0
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.001))
+            .frame(width: 6)
+            .overlay(
+                Rectangle()
+                    .fill(Color.white.opacity(0.04))
+                    .frame(width: 1)
+            )
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.resizeLeftRight.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .gesture(
+                DragGesture()
+                    .onChanged { v in
+                        let newWidth = width - v.translation.width
+                        width = max(220, min(500, newWidth))
+                    }
+            )
     }
 }
 

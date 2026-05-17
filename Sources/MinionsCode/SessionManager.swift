@@ -1,5 +1,13 @@
 import Foundation
 
+/// Snapshot of a parsed JSONL: sticky cache so we don't re-parse unchanged files every poll tick.
+struct JsonlCache: Sendable {
+    var fingerprint: String  // "size:mtime" combo
+    var usage: TokenUsage
+    var model: String?
+    var aiTitle: String?
+}
+
 @MainActor
 @Observable
 final class SessionManager {
@@ -9,6 +17,8 @@ final class SessionManager {
     var selectedSessionId: String?
     private var timer: Timer?
     private var customNames: [String: String] = [:]
+    nonisolated(unsafe) private static var cache: [String: JsonlCache] = [:]
+    nonisolated(unsafe) private static let cacheLock = NSLock()
 
     private let claudeDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
     private let namesFile: URL
@@ -27,7 +37,7 @@ final class SessionManager {
     var totalCost: Double { sessions.reduce(0) { $0 + $1.cost } }
     var activeSessions: Int { sessions.filter(\.isAlive).count }
 
-    func startPolling(interval: TimeInterval = 3) {
+    func startPolling(interval: TimeInterval = 5) {
         scan()
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.scan() }
@@ -35,16 +45,27 @@ final class SessionManager {
     }
 
     func scan() {
+        let snapshotNames = customNames
+        let claudeDir = self.claudeDir
+        Task.detached(priority: .utility) {
+            let sessions = Self.scanSync(claudeDir: claudeDir, customNames: snapshotNames)
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.sessions = sessions
+                NotificationManager.shared.observe(sessions: sessions)
+            }
+        }
+    }
+
+    nonisolated static func scanSync(claudeDir: URL, customNames: [String: String]) -> [SessionInfo] {
         let sessionsDir = claudeDir.appendingPathComponent("sessions")
         let projectsDir = claudeDir.appendingPathComponent("projects")
 
         guard let files = try? FileManager.default.contentsOfDirectory(at: sessionsDir, includingPropertiesForKeys: nil) else {
-            sessions = []
-            return
+            return []
         }
 
         var result: [SessionInfo] = []
-
         for file in files where file.pathExtension == "json" {
             guard let data = try? Data(contentsOf: file),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
@@ -58,7 +79,7 @@ final class SessionManager {
             let startedAtMs = json["startedAt"] as? Double
             let startedAt = startedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }
 
-            let (usage, model, aiTitle) = parseUsage(sessionId: sessionId, projectsDir: projectsDir)
+            let (usage, model, aiTitle) = parseUsageStatic(sessionId: sessionId, projectsDir: projectsDir)
             let cost = Pricing.cost(for: usage, model: model)
             let cacheHitRate: Double = {
                 let total = usage.cacheRead + usage.cacheCreation + usage.totalInput
@@ -66,8 +87,7 @@ final class SessionManager {
                 return Double(usage.cacheRead) / Double(total)
             }()
 
-            let name = customNames[sessionId] ?? aiTitle ?? shortPath(cwd)
-
+            let name = customNames[sessionId] ?? aiTitle ?? Self.shortPathStatic(cwd)
             result.append(SessionInfo(
                 id: sessionId, pid: pid, sessionId: sessionId, name: name,
                 cwd: cwd, status: alive ? status : "dead", startedAt: startedAt,
@@ -75,33 +95,45 @@ final class SessionManager {
                 cacheHitRate: cacheHitRate, isAlive: alive
             ))
         }
-
-        sessions = result.sorted { ($0.isAlive ? 0 : 1, -$0.cost) < ($1.isAlive ? 0 : 1, -$1.cost) }
-        NotificationManager.shared.observe(sessions: sessions)
+        return result.sorted { ($0.isAlive ? 0 : 1, -$0.cost) < ($1.isAlive ? 0 : 1, -$1.cost) }
     }
 
     func renameSession(_ id: String, to name: String) {
         customNames[id] = name.isEmpty ? nil : name
         saveNames()
         if let idx = sessions.firstIndex(where: { $0.id == id }) {
-            sessions[idx].name = name.isEmpty ? shortPath(sessions[idx].cwd) : name
+            sessions[idx].name = name.isEmpty ? Self.shortPathStatic(sessions[idx].cwd) : name
         }
     }
 
-    private func parseUsage(sessionId: String, projectsDir: URL) -> (TokenUsage, String?, String?) {
-        var usage = TokenUsage()
-        var model: String?
-        var aiTitle: String?
-
+    /// Caches by (size,mtime) — skips re-parsing if the JSONL file hasn't grown/changed since last scan.
+    /// This is the difference between a 200ms scan and a 5s scan when 14 multi-MB files exist.
+    nonisolated private static func parseUsageStatic(sessionId: String, projectsDir: URL) -> (TokenUsage, String?, String?) {
         guard let projects = try? FileManager.default.contentsOfDirectory(at: projectsDir, includingPropertiesForKeys: nil) else {
-            return (usage, model, aiTitle)
+            return (TokenUsage(), nil, nil)
         }
 
         for project in projects {
             let jsonlFile = project.appendingPathComponent("\(sessionId).jsonl")
-            guard FileManager.default.fileExists(atPath: jsonlFile.path),
-                  let content = try? String(contentsOf: jsonlFile, encoding: .utf8) else { continue }
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: jsonlFile.path),
+                  let size = attrs[.size] as? Int,
+                  let mtime = attrs[.modificationDate] as? Date else { continue }
 
+            let fingerprint = "\(size):\(mtime.timeIntervalSince1970)"
+
+            cacheLock.lock()
+            if let cached = cache[sessionId], cached.fingerprint == fingerprint {
+                cacheLock.unlock()
+                return (cached.usage, cached.model, cached.aiTitle)
+            }
+            cacheLock.unlock()
+
+            // Cache miss — parse the file.
+            guard let content = try? String(contentsOf: jsonlFile, encoding: .utf8) else { continue }
+
+            var usage = TokenUsage()
+            var model: String?
+            var aiTitle: String?
             for line in content.components(separatedBy: .newlines) where !line.isEmpty {
                 guard let lineData = line.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else { continue }
@@ -118,12 +150,19 @@ final class SessionManager {
                 usage.totalOutput += u["output_tokens"] as? Int ?? 0
                 usage.cacheRead += u["cache_read_input_tokens"] as? Int ?? 0
                 usage.cacheCreation += u["cache_creation_input_tokens"] as? Int ?? 0
-                usage.messageCount += 1
+                if obj["isSidechain"] as? Bool != true {
+                    usage.messageCount += 1
+                }
                 if let m = message["model"] as? String { model = m }
             }
-            break
+
+            let snapshot = JsonlCache(fingerprint: fingerprint, usage: usage, model: model, aiTitle: aiTitle)
+            cacheLock.lock()
+            cache[sessionId] = snapshot
+            cacheLock.unlock()
+            return (usage, model, aiTitle)
         }
-        return (usage, model, aiTitle)
+        return (TokenUsage(), nil, nil)
     }
 
     private func loadNames() {
@@ -141,6 +180,10 @@ final class SessionManager {
     }
 
     private func shortPath(_ p: String) -> String {
+        Self.shortPathStatic(p)
+    }
+
+    nonisolated private static func shortPathStatic(_ p: String) -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         if p.hasPrefix(home) { return "~" + p.dropFirst(home.count) }
         return p

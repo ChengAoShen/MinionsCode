@@ -6,6 +6,63 @@ enum SessionMode {
     case claude(resumeId: String?)
 }
 
+/// Singleton that owns the *single* global NSEvent local monitor.
+/// Per-tab monitors caused O(N) closures to run per keystroke; this fixes that.
+@MainActor
+final class TerminalKeyMonitor {
+    static let shared = TerminalKeyMonitor()
+
+    weak var activeTerminal: LocalProcessTerminalView?
+    var activeIsReadOnly: Bool = false
+    nonisolated(unsafe) private var monitor: Any?
+
+    private init() {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard let self = self,
+                  let terminal = self.activeTerminal,
+                  let window = terminal.window,
+                  window.firstResponder === terminal else {
+                return event
+            }
+            return self.handle(event, terminal: terminal)
+        }
+    }
+
+    private func handle(_ event: NSEvent, terminal: LocalProcessTerminalView) -> NSEvent? {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+        if activeIsReadOnly {
+            if mods.contains(.command) {
+                let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
+                if ["c", "a", "f"].contains(chars) { return event }
+            }
+            let sk = event.specialKey
+            if sk == .pageUp || sk == .pageDown || sk == .home || sk == .end
+                || sk == .upArrow || sk == .downArrow {
+                return event
+            }
+            return nil
+        }
+
+        if mods.contains(.command) && (event.specialKey == .delete || event.keyCode == 51) {
+            terminal.send(txt: "\u{15}"); return nil
+        }
+        if mods.contains(.command) && event.keyCode == 117 {
+            terminal.send(txt: "\u{0B}"); return nil
+        }
+        if mods.contains(.command) && event.specialKey == .leftArrow {
+            terminal.send(txt: "\u{01}"); return nil
+        }
+        if mods.contains(.command) && event.specialKey == .rightArrow {
+            terminal.send(txt: "\u{05}"); return nil
+        }
+        if mods.contains(.option) && (event.specialKey == .delete || event.keyCode == 51) {
+            terminal.send(txt: "\u{17}"); return nil
+        }
+        return event
+    }
+}
+
 @MainActor
 final class TerminalSession: @unchecked Sendable {
     let terminalView: LocalProcessTerminalView
@@ -14,7 +71,6 @@ final class TerminalSession: @unchecked Sendable {
     let cwd: String
     var isReadOnly: Bool = false
     private(set) var isRunning = false
-    nonisolated(unsafe) private var keyMonitor: Any?
 
     init(mode: SessionMode = .shell, cwd: String? = nil) {
         self.mode = mode
@@ -41,14 +97,6 @@ final class TerminalSession: @unchecked Sendable {
             terminalView.startProcess(executable: claudePath, args: args, environment: env, execName: "claude", currentDirectory: self.cwd)
         }
         isRunning = true
-        installKeyMonitor()
-    }
-
-    deinit {
-        // keyMonitor is nonisolated-safe to release through MainActor.assumeIsolated guards
-        if let m = keyMonitor {
-            NSEvent.removeMonitor(m)
-        }
     }
 
     func sendCommand(_ command: String) {
@@ -57,6 +105,16 @@ final class TerminalSession: @unchecked Sendable {
 
     func toggleReadOnly() {
         isReadOnly.toggle()
+        // If this terminal is the active one, sync the monitor flag
+        if TerminalKeyMonitor.shared.activeTerminal === terminalView {
+            TerminalKeyMonitor.shared.activeIsReadOnly = isReadOnly
+        }
+    }
+
+    /// Activate keyboard handling for this terminal. Call when the user switches tabs.
+    func activate() {
+        TerminalKeyMonitor.shared.activeTerminal = terminalView
+        TerminalKeyMonitor.shared.activeIsReadOnly = isReadOnly
     }
 
     func terminate() {
@@ -64,76 +122,16 @@ final class TerminalSession: @unchecked Sendable {
         isRunning = false
     }
 
-    /// Intercepts key events bound for our terminal view to:
-    /// 1. Translate macOS shortcuts (Cmd+Backspace, Cmd+Left, Option+Backspace) to readline sequences.
-    /// 2. Swallow input events when in read-only mode.
-    /// Returns nil to consume the event, the original event to let it through.
-    private func installKeyMonitor() {
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            guard let self = self else { return event }
-            // Only intercept when our terminal is the first responder
-            guard let window = self.terminalView.window,
-                  window.firstResponder === self.terminalView else {
-                return event
-            }
-            return self.handleKey(event)
-        }
-    }
-
-    private func handleKey(_ event: NSEvent) -> NSEvent? {
-        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-
-        // Read-only mode: drop everything except scrolling/copy/select-all/find
-        if isReadOnly {
-            if mods.contains(.command) {
-                let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
-                if ["c", "a", "f"].contains(chars) { return event }
-            }
-            if event.specialKey == .pageUp || event.specialKey == .pageDown
-                || event.specialKey == .home || event.specialKey == .end
-                || event.specialKey == .upArrow || event.specialKey == .downArrow {
-                return event
-            }
-            return nil
-        }
-
-        // Cmd+Backspace -> Ctrl+U (kill to start of line)
-        if mods.contains(.command) && (event.specialKey == .delete || event.keyCode == 51) {
-            terminalView.send(txt: "\u{15}")
-            return nil
-        }
-        // Cmd+Delete (forward delete) -> Ctrl+K (kill to end of line)
-        if mods.contains(.command) && event.keyCode == 117 {
-            terminalView.send(txt: "\u{0B}")
-            return nil
-        }
-        // Cmd+Left -> Ctrl+A (move to start of line)
-        if mods.contains(.command) && event.specialKey == .leftArrow {
-            terminalView.send(txt: "\u{01}")
-            return nil
-        }
-        // Cmd+Right -> Ctrl+E (move to end of line)
-        if mods.contains(.command) && event.specialKey == .rightArrow {
-            terminalView.send(txt: "\u{05}")
-            return nil
-        }
-        // Option+Backspace -> Ctrl+W (delete word backward)
-        if mods.contains(.option) && (event.specialKey == .delete || event.keyCode == 51) {
-            terminalView.send(txt: "\u{17}")
-            return nil
-        }
-        return event
-    }
-
     static func applyDefaultTheme(to terminal: LocalProcessTerminalView) {
+        let theme = AppSettings.shared.theme
         terminal.font = NSFont(name: "MesloLGS NF", size: AppSettings.shared.fontSize)
             ?? NSFont(name: "JetBrains Mono", size: AppSettings.shared.fontSize)
             ?? NSFont(name: "SF Mono", size: AppSettings.shared.fontSize)
             ?? NSFont.monospacedSystemFont(ofSize: AppSettings.shared.fontSize, weight: .regular)
-        terminal.nativeForegroundColor = NSColor(red: 0.93, green: 0.92, blue: 0.85, alpha: 1)
-        terminal.nativeBackgroundColor = NSColor(red: 0.05, green: 0.05, blue: 0.06, alpha: 1)
-        terminal.caretColor = NSColor(red: 1.0, green: 0.78, blue: 0.10, alpha: 1)
-        terminal.selectedTextBackgroundColor = NSColor(red: 1.0, green: 0.78, blue: 0.10, alpha: 0.3)
+        terminal.nativeForegroundColor = theme.foreground
+        terminal.nativeBackgroundColor = theme.background
+        terminal.caretColor = theme.primary
+        terminal.selectedTextBackgroundColor = theme.primary.withAlphaComponent(0.3)
     }
 
     private func buildEnv() -> [String] {

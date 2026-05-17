@@ -24,4 +24,5 @@ struct MinionsCodeApp: App {
 
 extension Notification.Name {
     static let newSession = Notification.Name("newSession")
+    static let toggleSidebar = Notification.Name("toggleSidebar")
 }
