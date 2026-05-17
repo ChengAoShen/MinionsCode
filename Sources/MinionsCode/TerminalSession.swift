@@ -219,19 +219,18 @@ final class TerminalSession: @unchecked Sendable {
             ?? NSFont(name: "SF Mono", size: AppSettings.shared.fontSize)
             ?? NSFont.monospacedSystemFont(ofSize: AppSettings.shared.fontSize, weight: .regular)
         terminal.nativeForegroundColor = theme.foreground
-        // Translucent: cells render with low alpha so vibrancy shows through.
+        // Translucent: cells render fully transparent so the SwiftUI container
+        // can paint a single uniform tint behind both the terminal AND its
+        // padding margin — otherwise the cell area is darker than the margin.
         // Opaque: full theme background.
-        terminal.nativeBackgroundColor = translucent
-            ? theme.background.withAlphaComponent(0.18)
-            : theme.background
+        terminal.nativeBackgroundColor = translucent ? .clear : theme.background
         terminal.caretColor = theme.primary
         terminal.selectedTextBackgroundColor = theme.primary.withAlphaComponent(0.3)
 
         // SwiftTerm initialises `layer.backgroundColor` from `nativeBackgroundColor`
         // ONCE in `setupOptions()`, then never reads it again — even if you change
         // `nativeBackgroundColor` later, the layer stays at the original opaque color.
-        // For glass-effect translucency we must override the layer ourselves so cell
-        // fills (which now have alpha) blend onto the NSVisualEffectView underneath.
+        // For glass-effect translucency we must override the layer ourselves.
         terminal.wantsLayer = true
         terminal.layer?.backgroundColor = translucent
             ? NSColor.clear.cgColor

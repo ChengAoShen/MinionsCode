@@ -458,6 +458,13 @@ struct ContentView: View {
                             .id(tid)
                             .padding(.horizontal, 10)
                             .padding(.bottom, 6)
+                            .background(
+                                // Uniform tint behind both cells and padding margin —
+                                // see TerminalSession.applyDefaultTheme for why cell
+                                // backgrounds are transparent in translucent mode.
+                                Color(settings.theme.background)
+                                    .opacity(settings.translucentBackground ? 0.18 : 1)
+                            )
                     }
                 } else {
                     emptyState
