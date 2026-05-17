@@ -9,7 +9,6 @@ const COOLDOWN: Duration = Duration::from_secs(30);
 
 /// Tracks per-session status transitions and fires a desktop notification only
 /// when a main conversation finishes (busy ≥ 8s, 30s cooldown between fires).
-/// Same heuristic as the Swift NotificationManager.
 pub struct Notifier {
     last_status: HashMap<String, String>,
     busy_start: HashMap<String, Instant>,
