@@ -13,6 +13,8 @@ final class AppSettings {
     private let notificationsKey = "minionscode.notifications"
     private let soundKey = "minionscode.sound"
 
+    private let translucentKey = "minionscode.translucent"
+
     var fontSize: CGFloat {
         didSet { defaults.set(Double(fontSize), forKey: fontSizeKey) }
     }
@@ -33,12 +35,17 @@ final class AppSettings {
         didSet { defaults.set(soundEnabled, forKey: soundKey) }
     }
 
+    var translucentBackground: Bool {
+        didSet { defaults.set(translucentBackground, forKey: translucentKey) }
+    }
+
     init() {
         self.fontSize = defaults.object(forKey: fontSizeKey) as? CGFloat ?? 13
         self.theme = Theme(rawValue: defaults.string(forKey: themeKey) ?? "minion") ?? .minion
         self.groupByDirectory = defaults.object(forKey: groupByDirKey) as? Bool ?? true
         self.notificationsEnabled = defaults.object(forKey: notificationsKey) as? Bool ?? true
         self.soundEnabled = defaults.object(forKey: soundKey) as? Bool ?? true
+        self.translucentBackground = defaults.object(forKey: translucentKey) as? Bool ?? true
     }
 }
 

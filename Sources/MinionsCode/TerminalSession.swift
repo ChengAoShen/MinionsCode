@@ -12,26 +12,27 @@ enum SessionMode {
 final class TerminalKeyMonitor {
     static let shared = TerminalKeyMonitor()
 
-    weak var activeTerminal: LocalProcessTerminalView?
-    var activeIsReadOnly: Bool = false
+    weak var activeSession: TerminalSession?
     nonisolated(unsafe) private var monitor: Any?
 
     private init() {
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             guard let self = self,
-                  let terminal = self.activeTerminal,
-                  let window = terminal.window,
-                  window.firstResponder === terminal else {
+                  let session = self.activeSession,
+                  let window = session.terminalView.window,
+                  window.firstResponder === session.terminalView else {
                 return event
             }
-            return self.handle(event, terminal: terminal)
+            return self.handle(event, session: session)
         }
     }
 
-    private func handle(_ event: NSEvent, terminal: LocalProcessTerminalView) -> NSEvent? {
+    private func handle(_ event: NSEvent, session: TerminalSession) -> NSEvent? {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let terminal = session.terminalView
 
-        if activeIsReadOnly {
+        // Read-only: read state freshly from the session, not a cached flag.
+        if session.isReadOnly {
             if mods.contains(.command) {
                 let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
                 if ["c", "a", "f"].contains(chars) { return event }
@@ -91,6 +92,10 @@ final class TerminalSession: @unchecked Sendable {
             let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
             terminalView.startProcess(executable: shell, args: ["-l"], environment: env, execName: "-\(URL(fileURLWithPath: shell).lastPathComponent)", currentDirectory: self.cwd)
         case .claude(let resumeId):
+            // Claude sessions default to read-only — like the official `claude --resume`
+            // experience, the user can scroll/copy without accidentally typing into a
+            // long-running task. Toggle with ⌘E or the lock pill.
+            self.isReadOnly = true
             let claudePath = findClaude()
             var args = [String]()
             if let rid = resumeId { args = ["--resume", rid] }
@@ -105,16 +110,11 @@ final class TerminalSession: @unchecked Sendable {
 
     func toggleReadOnly() {
         isReadOnly.toggle()
-        // If this terminal is the active one, sync the monitor flag
-        if TerminalKeyMonitor.shared.activeTerminal === terminalView {
-            TerminalKeyMonitor.shared.activeIsReadOnly = isReadOnly
-        }
     }
 
     /// Activate keyboard handling for this terminal. Call when the user switches tabs.
     func activate() {
-        TerminalKeyMonitor.shared.activeTerminal = terminalView
-        TerminalKeyMonitor.shared.activeIsReadOnly = isReadOnly
+        TerminalKeyMonitor.shared.activeSession = self
     }
 
     func terminate() {
@@ -124,12 +124,15 @@ final class TerminalSession: @unchecked Sendable {
 
     static func applyDefaultTheme(to terminal: LocalProcessTerminalView) {
         let theme = AppSettings.shared.theme
+        let translucent = AppSettings.shared.translucentBackground
         terminal.font = NSFont(name: "MesloLGS NF", size: AppSettings.shared.fontSize)
             ?? NSFont(name: "JetBrains Mono", size: AppSettings.shared.fontSize)
             ?? NSFont(name: "SF Mono", size: AppSettings.shared.fontSize)
             ?? NSFont.monospacedSystemFont(ofSize: AppSettings.shared.fontSize, weight: .regular)
         terminal.nativeForegroundColor = theme.foreground
-        terminal.nativeBackgroundColor = theme.background
+        terminal.nativeBackgroundColor = translucent
+            ? theme.background.withAlphaComponent(0.55)
+            : theme.background
         terminal.caretColor = theme.primary
         terminal.selectedTextBackgroundColor = theme.primary.withAlphaComponent(0.3)
     }

@@ -43,12 +43,20 @@ struct ContentView: View {
                     .transition(.move(edge: .trailing))
             }
         }
-        .background(BG_DARKEST)
+        .background(
+            ZStack {
+                if settings.translucentBackground {
+                    VisualEffectBackground(material: .underWindowBackground, blendingMode: .behindWindow)
+                }
+                BG_DARKEST.opacity(settings.translucentBackground ? 0.55 : 1)
+            }
+        )
         .preferredColorScheme(.dark)
         .environment(\.uiScale, settings.fontSize / 13.0)
         .onAppear {
             manager.startPolling()
             NSApp.activate(ignoringOtherApps: true)
+            applyWindowTranslucency()
             if terminals.isEmpty { newShellSession() }
         }
         .onChange(of: settings.theme) { _, _ in
@@ -61,6 +69,12 @@ struct ContentView: View {
                 TerminalSession.applyDefaultTheme(to: t.terminalView)
             }
         }
+        .onChange(of: settings.translucentBackground) { _, _ in
+            applyWindowTranslucency()
+            for t in terminals.values {
+                TerminalSession.applyDefaultTheme(to: t.terminalView)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .newSession)) { _ in
             newShellSession()
         }
@@ -69,6 +83,18 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingSettings) {
             SettingsSheet(isPresented: $showingSettings)
+        }
+    }
+
+    private func applyWindowTranslucency() {
+        guard let window = NSApp.windows.first else { return }
+        if settings.translucentBackground {
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.titlebarAppearsTransparent = true
+        } else {
+            window.isOpaque = true
+            window.backgroundColor = NSColor(red: 0.04, green: 0.04, blue: 0.05, alpha: 1)
         }
     }
 
@@ -395,6 +421,7 @@ struct ContentView: View {
                 .foregroundColor(GOLD)
 
             ReadOnlyToggle(terminal: terminal)
+            CdFolderButton(terminal: terminal)
 
             Spacer()
             if let s = session {
@@ -531,6 +558,40 @@ struct IsolatedTerminalView: View {
     }
 }
 
+struct CdFolderButton: View {
+    let terminal: TerminalSession
+
+    var body: some View {
+        Button(action: pickAndCd) {
+            HStack(spacing: 3) {
+                Image(systemName: "folder").font(.system(size: 10))
+                Text("cd").font(.system(size: 10, weight: .semibold, design: .monospaced))
+            }
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(Capsule().fill(Color.white.opacity(0.06)))
+            .foregroundColor(.white.opacity(0.7))
+        }
+        .buttonStyle(.plain)
+        .help("Pick a folder and cd into it")
+    }
+
+    private func pickAndCd() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.title = "Choose a folder to cd into"
+        panel.directoryURL = URL(fileURLWithPath: terminal.cwd)
+        if panel.runModal() == .OK, let url = panel.url {
+            let path = url.path
+            // Quote to handle spaces
+            let escaped = path.replacingOccurrences(of: "\"", with: "\\\"")
+            terminal.terminalView.send(txt: "cd \"\(escaped)\"\n")
+        }
+    }
+}
+
 struct ReadOnlyToggle: View {
     let terminal: TerminalSession
     @State private var readOnly = false
@@ -559,42 +620,71 @@ struct ReadOnlyToggle: View {
 
 struct ClaudeLaunchMenu: View {
     let terminal: TerminalSession
+    @State private var showingPopover = false
+    @State private var selectedModel: ClaudeModel = .auto
+    @State private var effortMax = false
+    @State private var bypassPermissions = false
+    @State private var resumeMode: ResumeMode = .none
+    @State private var dangerouslySkipPermissions = false
+    @State private var verbose = false
+    @State private var print: String = ""
+
+    enum ClaudeModel: String, CaseIterable, Identifiable {
+        case auto, opus, sonnet, haiku
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .auto: return "Default"
+            case .opus: return "Opus"
+            case .sonnet: return "Sonnet"
+            case .haiku: return "Haiku"
+            }
+        }
+        var flag: String? {
+            switch self {
+            case .auto: return nil
+            case .opus: return "--model opus"
+            case .sonnet: return "--model sonnet"
+            case .haiku: return "--model haiku"
+            }
+        }
+    }
+
+    enum ResumeMode: String, CaseIterable, Identifiable {
+        case none, resume, continueLast
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .none: return "None"
+            case .resume: return "Resume picker"
+            case .continueLast: return "Continue last"
+            }
+        }
+        var flag: String? {
+            switch self {
+            case .none: return nil
+            case .resume: return "--resume"
+            case .continueLast: return "--continue"
+            }
+        }
+    }
+
+    var composedCommand: String {
+        var parts = ["claude"]
+        if let f = selectedModel.flag { parts.append(f) }
+        if effortMax { parts.append("--effort max") }
+        if bypassPermissions { parts.append("--permission-mode bypassPermissions") }
+        if dangerouslySkipPermissions { parts.append("--dangerously-skip-permissions") }
+        if verbose { parts.append("--verbose") }
+        if let f = resumeMode.flag { parts.append(f) }
+        if !print.trimmingCharacters(in: .whitespaces).isEmpty {
+            parts.append("--print \(print.shellQuoted())")
+        }
+        return parts.joined(separator: " ")
+    }
 
     var body: some View {
-        Menu {
-            Section("Quick start") {
-                Button { terminal.sendCommand("claude") } label: {
-                    Label("claude", systemImage: "sparkles")
-                }
-                Button { terminal.sendCommand("claude --effort max") } label: {
-                    Label("claude — effort max", systemImage: "bolt.fill")
-                }
-                Button { terminal.sendCommand("claude --permission-mode bypassPermissions") } label: {
-                    Label("claude — bypass permissions", systemImage: "lock.open")
-                }
-                Button { terminal.sendCommand("claude --effort max --permission-mode bypassPermissions") } label: {
-                    Label("claude — max + bypass", systemImage: "flame.fill")
-                }
-            }
-            Section("Models") {
-                Button { terminal.sendCommand("claude --model opus") } label: { Text("claude — opus") }
-                Button { terminal.sendCommand("claude --model sonnet") } label: { Text("claude — sonnet") }
-                Button { terminal.sendCommand("claude --model haiku") } label: { Text("claude — haiku") }
-            }
-            Section("Resume") {
-                Button { terminal.sendCommand("claude --resume") } label: {
-                    Label("claude — resume picker", systemImage: "list.bullet")
-                }
-                Button { terminal.sendCommand("claude --continue") } label: {
-                    Label("claude — continue last", systemImage: "arrow.clockwise")
-                }
-            }
-            Section("Advanced") {
-                Button { terminal.sendCommand("claude --help") } label: { Text("claude — help") }
-                Button { terminal.sendCommand("claude doctor") } label: { Text("claude doctor") }
-                Button { terminal.sendCommand("claude /cost") } label: { Text("claude /cost") }
-            }
-        } label: {
+        Button { showingPopover = true } label: {
             HStack(spacing: 4) {
                 Image(systemName: "sparkles")
                 Text("Run Claude")
@@ -605,9 +695,106 @@ struct ClaudeLaunchMenu: View {
             .background(Capsule().fill(Color(red: 1.0, green: 0.78, blue: 0.10).opacity(0.15)))
             .foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.10))
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
+        .buttonStyle(.plain)
+        .popover(isPresented: $showingPopover, arrowEdge: .top) {
+            popoverContent
+                .frame(width: 360)
+        }
+    }
+
+    private var popoverContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Image(systemName: "sparkles").foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.10))
+                Text("Build a claude command").font(.system(size: 13, weight: .heavy))
+                Spacer()
+            }
+
+            // Model
+            VStack(alignment: .leading, spacing: 6) {
+                Text("MODEL").font(.system(size: 9, weight: .bold)).foregroundColor(.secondary).tracking(0.5)
+                Picker("", selection: $selectedModel) {
+                    ForEach(ClaudeModel.allCases) { m in Text(m.label).tag(m) }
+                }
+                .pickerStyle(.segmented).labelsHidden()
+            }
+
+            // Flags
+            VStack(alignment: .leading, spacing: 4) {
+                Text("FLAGS").font(.system(size: 9, weight: .bold)).foregroundColor(.secondary).tracking(0.5)
+                Toggle(isOn: $effortMax) { Text("--effort max").font(.system(.body, design: .monospaced)) }
+                Toggle(isOn: $bypassPermissions) { Text("--permission-mode bypassPermissions").font(.system(.body, design: .monospaced)) }
+                Toggle(isOn: $dangerouslySkipPermissions) { Text("--dangerously-skip-permissions").font(.system(.body, design: .monospaced)) }
+                Toggle(isOn: $verbose) { Text("--verbose").font(.system(.body, design: .monospaced)) }
+            }
+
+            // Resume
+            VStack(alignment: .leading, spacing: 6) {
+                Text("RESUME").font(.system(size: 9, weight: .bold)).foregroundColor(.secondary).tracking(0.5)
+                Picker("", selection: $resumeMode) {
+                    ForEach(ResumeMode.allCases) { r in Text(r.label).tag(r) }
+                }
+                .pickerStyle(.segmented).labelsHidden()
+            }
+
+            // One-shot --print
+            VStack(alignment: .leading, spacing: 4) {
+                Text("ONE-SHOT --print (optional)").font(.system(size: 9, weight: .bold)).foregroundColor(.secondary).tracking(0.5)
+                TextField("e.g. summarize this branch", text: $print)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11, design: .monospaced))
+            }
+
+            Divider()
+
+            // Preview
+            VStack(alignment: .leading, spacing: 4) {
+                Text("COMMAND PREVIEW").font(.system(size: 9, weight: .bold)).foregroundColor(.secondary).tracking(0.5)
+                Text(composedCommand)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.10))
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.4)))
+                    .textSelection(.enabled)
+            }
+
+            HStack {
+                Button("Reset") { reset() }
+                    .buttonStyle(.borderless)
+                Spacer()
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(composedCommand, forType: .string)
+                }
+                Button("Run") {
+                    terminal.sendCommand(composedCommand)
+                    showingPopover = false
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .tint(Color(red: 1.0, green: 0.78, blue: 0.10))
+            }
+        }
+        .padding(16)
+    }
+
+    private func reset() {
+        selectedModel = .auto
+        effortMax = false
+        bypassPermissions = false
+        dangerouslySkipPermissions = false
+        verbose = false
+        resumeMode = .none
+        print = ""
+    }
+}
+
+extension String {
+    func shellQuoted() -> String {
+        // Wrap in single quotes and escape any embedded single-quotes
+        let escaped = self.replacingOccurrences(of: "'", with: "'\\''")
+        return "'\(escaped)'"
     }
 }
 
@@ -906,6 +1093,7 @@ struct SettingsSheet: View {
                     }
                     .labelsHidden().frame(width: 200)
                 }
+                Toggle("Translucent terminal background", isOn: $settings.translucentBackground)
             }
             Divider()
             VStack(alignment: .leading, spacing: 10) {
@@ -962,7 +1150,6 @@ struct ScaledFontModifier: ViewModifier {
 
 struct SidebarResizer: View {
     @Binding var width: CGFloat
-    @State private var dragStart: CGFloat = 0
 
     var body: some View {
         Rectangle()
@@ -987,6 +1174,27 @@ struct SidebarResizer: View {
                         width = max(220, min(500, newWidth))
                     }
             )
+    }
+}
+
+/// NSVisualEffectView wrapper — gives the window the translucent vibrancy
+/// effect like Terminal.app's "use background color with transparency" mode.
+struct VisualEffectBackground: NSViewRepresentable {
+    let material: NSVisualEffectView.Material
+    let blendingMode: NSVisualEffectView.BlendingMode
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material
+        v.blendingMode = blendingMode
+        v.state = .active
+        v.isEmphasized = false
+        return v
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        view.material = material
+        view.blendingMode = blendingMode
     }
 }
 
