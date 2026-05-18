@@ -24,7 +24,7 @@
 ## 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ChengAoShen/ManageCode/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Minions-Land/ManageCode/main/install.sh | bash
 ```
 
 就这一行。脚本会自动检测平台，从 GitHub Releases 下对应的预编译二进制，
@@ -171,7 +171,7 @@ CLAUDE_BIN=/opt/homebrew/bin/claude managecode
 ## 从源码构建
 
 ```bash
-git clone https://github.com/ChengAoShen/ManageCode.git
+git clone https://github.com/Minions-Land/ManageCode.git
 cd ManageCode
 ./build.sh
 ```

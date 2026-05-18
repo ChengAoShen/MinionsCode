@@ -24,7 +24,7 @@ come back later — all without opening a single new window.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ChengAoShen/ManageCode/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Minions-Land/ManageCode/main/install.sh | bash
 ```
 
 That's it. The script downloads the prebuilt binary for your platform and
@@ -181,7 +181,7 @@ writes.
 ## Build from source
 
 ```bash
-git clone https://github.com/ChengAoShen/ManageCode.git
+git clone https://github.com/Minions-Land/ManageCode.git
 cd ManageCode
 ./build.sh
 ```
