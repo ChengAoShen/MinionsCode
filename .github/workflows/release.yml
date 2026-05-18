@@ -42,16 +42,16 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Strip
-        run: strip target/${{ matrix.target }}/release/minionscode
+        run: strip target/${{ matrix.target }}/release/managecode
 
       - name: Package
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME:-${{ inputs.tag }}}"
           STAGE="$(mktemp -d)"
-          cp "target/${{ matrix.target }}/release/minionscode" "$STAGE/minionscode"
-          ARCHIVE="minionscode-${TAG}-${{ matrix.asset }}.tar.gz"
-          tar -C "$STAGE" -czf "$ARCHIVE" minionscode
+          cp "target/${{ matrix.target }}/release/managecode" "$STAGE/managecode"
+          ARCHIVE="managecode-${TAG}-${{ matrix.asset }}.tar.gz"
+          tar -C "$STAGE" -czf "$ARCHIVE" managecode
           shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 

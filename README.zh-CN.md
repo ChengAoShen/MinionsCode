@@ -1,11 +1,11 @@
-# MinionsCode
+# ManageCode
 
 > 在终端里管理你机器上所有 Claude Code 会话的看板工具。
 
 [English](README.md) · **简体中文**
 
 ```
-┌─ MinionsCode ──── 49 sessions · 1 active · ▶ 2 tmux · $2916.45 total ──────┐
+┌─ ManageCode ──── 49 sessions · 1 active · ▶ 2 tmux · $2916.45 total ──────┐
 │ ▾ ~/Project/05_2026/MinionsCode                                ▶1  ●1   3  │
 │    ▶ tmux busy   rust-tui notify integration   sonnet-4.6  $  2.41   2m   │
 │    ● idle        refresh strategy notes         opus       $  0.47  14h   │
@@ -24,11 +24,11 @@
 ## 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ChengAoShen/MinionsCode/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ChengAoShen/ManageCode/main/install.sh | bash
 ```
 
 就这一行。脚本会自动检测平台，从 GitHub Releases 下对应的预编译二进制，
-装到 `~/.local/bin/minionscode`。**不需要 Rust 工具链**。
+装到 `~/.local/bin/managecode`。**不需要 Rust 工具链**。
 
 **支持的平台**：Linux x86_64、macOS Apple Silicon（M1 及以上）。
 **Intel Mac / Windows**：[从源码编译](#从源码构建)（Windows 需要在 WSL 里编）。
@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/ChengAoShen/MinionsCode/main/instal
 ## 第一次使用
 
 ```bash
-minionscode
+managecode
 ```
 
 打开后你会看到这台机器上所有的 session——当前活跃的在最上面，最近用过
@@ -60,7 +60,7 @@ minionscode
 ## 多会话——靠 tmux 实现
 
 只要你装了 `tmux`（macOS: `brew install tmux`，Ubuntu: `sudo apt install
-tmux`），MinionsCode 会自动把每个启动的 session 包到一个后台 tmux 里。
+tmux`），ManageCode 会自动把每个启动的 session 包到一个后台 tmux 里。
 也就是说：
 
 1. 在 session A 上按 `Enter` → 聊几句 → `Ctrl-b d`
@@ -148,35 +148,35 @@ FSEvents），只重读真正变化的文件。空闲时 CPU 接近 0。
 API，跟 Claude Code 一样。看板本身完全在本地。
 
 **能换 `claude` 二进制路径吗？** 能：
-`CLAUDE_BIN=/path/to/claude minionscode`。它默认也会在
+`CLAUDE_BIN=/path/to/claude managecode`。它默认也会在
 `/opt/homebrew/bin/claude`、`/usr/local/bin/claude`、
 `~/.claude/local/bin/claude`、`~/.local/bin/claude`、`$PATH` 里自动找。
 
-**怎么卸载？** `rm ~/.local/bin/minionscode`，就这样。
+**怎么卸载？** `rm ~/.local/bin/managecode`，就这样。
 
 ## 配置项
 
 ```bash
-minionscode --days 7        # 只看最近 7 天（默认 30）
-minionscode --list          # 不进 TUI，直接 print 出来
-minionscode --version
+managecode --days 7        # 只看最近 7 天（默认 30）
+managecode --list          # 不进 TUI，直接 print 出来
+managecode --version
 INSTALL_DIR=/usr/local/bin VERSION=v0.2.0 bash install.sh
-CLAUDE_BIN=/opt/homebrew/bin/claude minionscode
+CLAUDE_BIN=/opt/homebrew/bin/claude managecode
 ```
 
 持久化数据：自定义的 session 名字会存到
-`~/.minionscode/session-names.json`。这是 MinionsCode 唯一写入磁盘的
+`~/.managecode/session-names.json`。这是 ManageCode 唯一写入磁盘的
 文件。
 
 ## 从源码构建
 
 ```bash
-git clone https://github.com/ChengAoShen/MinionsCode.git
-cd MinionsCode
+git clone https://github.com/ChengAoShen/ManageCode.git
+cd ManageCode
 ./build.sh
 ```
 
-需要 Rust 1.74+。脚本会编 release，装到 `~/.local/bin/minionscode`
+需要 Rust 1.74+。脚本会编 release，装到 `~/.local/bin/managecode`
 （用 `PREFIX=/usr/local` 改装到别的地方）。
 
 ## 许可

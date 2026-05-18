@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build minionscode from source and install to ~/.local/bin (or $PREFIX/bin).
+# Build managecode from source and install to ~/.local/bin (or $PREFIX/bin).
 # Requires the Rust toolchain. End users without Rust should use install.sh instead.
 set -euo pipefail
 
@@ -12,9 +12,9 @@ echo "→ cargo build --release"
 cargo build --release
 
 mkdir -p "$DEST"
-install -m 755 target/release/minionscode "$DEST/minionscode"
+install -m 755 target/release/managecode "$DEST/managecode"
 
-echo "✓ installed: $DEST/minionscode"
+echo "✓ installed: $DEST/managecode"
 if ! echo ":$PATH:" | grep -q ":$DEST:"; then
   echo
   echo "  note: $DEST is not on your PATH."

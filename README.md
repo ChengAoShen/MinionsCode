@@ -1,11 +1,11 @@
-# MinionsCode
+# ManageCode
 
 > A terminal dashboard for managing every Claude Code session on your machine.
 
 **English** · [简体中文](README.zh-CN.md)
 
 ```
-┌─ MinionsCode ──── 49 sessions · 1 active · ▶ 2 tmux · $2916.45 total ──────┐
+┌─ ManageCode ──── 49 sessions · 1 active · ▶ 2 tmux · $2916.45 total ──────┐
 │ ▾ ~/Project/05_2026/MinionsCode                                ▶1  ●1   3  │
 │    ▶ tmux busy   rust-tui notify integration   sonnet-4.6  $  2.41   2m   │
 │    ● idle        refresh strategy notes         opus       $  0.47  14h   │
@@ -24,11 +24,11 @@ come back later — all without opening a single new window.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ChengAoShen/MinionsCode/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ChengAoShen/ManageCode/main/install.sh | bash
 ```
 
 That's it. The script downloads the prebuilt binary for your platform and
-installs it to `~/.local/bin/minionscode`. No Rust toolchain required.
+installs it to `~/.local/bin/managecode`. No Rust toolchain required.
 
 **Supported:** Linux x86_64, macOS Apple Silicon (M1 and newer).
 **Intel Mac / Windows:** [build from source](#build-from-source) (Windows needs WSL).
@@ -42,7 +42,7 @@ release.
 ## First run
 
 ```bash
-minionscode
+managecode
 ```
 
 You'll see every session on this machine — currently alive at the top,
@@ -63,7 +63,7 @@ The basics:
 ## Multi-session, made simple
 
 If you have `tmux` installed (Homebrew: `brew install tmux`, apt:
-`sudo apt install tmux`), MinionsCode automatically wraps every session
+`sudo apt install tmux`), ManageCode automatically wraps every session
 in a managed background process. That means:
 
 1. `Enter` on session A → talk for a while → `Ctrl-b d`
@@ -76,7 +76,7 @@ in a managed background process. That means:
 
 To force-end a backgrounded session: select it, press `K`, confirm.
 
-Without `tmux`, MinionsCode still works — it just runs claude directly,
+Without `tmux`, ManageCode still works — it just runs claude directly,
 one at a time. You exit claude the normal way (`/exit`, `Ctrl-D`) and
 you're back at the dashboard.
 
@@ -158,36 +158,36 @@ invoke `claude --print --model haiku` locally — and only Anthropic's
 API sees those queries. The dashboard itself is entirely local.
 
 **Can I point it at a different `claude` binary?** Yes:
-`CLAUDE_BIN=/path/to/claude minionscode`. It also auto-discovers
+`CLAUDE_BIN=/path/to/claude managecode`. It also auto-discovers
 `/opt/homebrew/bin/claude`, `/usr/local/bin/claude`,
 `~/.claude/local/bin/claude`, `~/.local/bin/claude`, and `$PATH`.
 
-**How do I uninstall?** `rm ~/.local/bin/minionscode`. That's all.
+**How do I uninstall?** `rm ~/.local/bin/managecode`. That's all.
 
 ## Configuration knobs
 
 ```bash
-minionscode --days 7        # only look back 7 days (default 30)
-minionscode --list          # print sessions to stdout, no TUI
-minionscode --version
+managecode --days 7        # only look back 7 days (default 30)
+managecode --list          # print sessions to stdout, no TUI
+managecode --version
 INSTALL_DIR=/usr/local/bin VERSION=v0.2.0 bash install.sh
-CLAUDE_BIN=/opt/homebrew/bin/claude minionscode
+CLAUDE_BIN=/opt/homebrew/bin/claude managecode
 ```
 
 Persistent state: custom session names go to
-`~/.minionscode/session-names.json`. That's the only file MinionsCode
+`~/.managecode/session-names.json`. That's the only file ManageCode
 writes.
 
 ## Build from source
 
 ```bash
-git clone https://github.com/ChengAoShen/MinionsCode.git
-cd MinionsCode
+git clone https://github.com/ChengAoShen/ManageCode.git
+cd ManageCode
 ./build.sh
 ```
 
 Requires Rust 1.74+. The build script compiles a release binary and
-installs it to `~/.local/bin/minionscode` (override with
+installs it to `~/.local/bin/managecode` (override with
 `PREFIX=/usr/local`).
 
 ## License

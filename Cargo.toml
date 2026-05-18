@@ -1,16 +1,16 @@
 [package]
-name = "minionscode"
-version = "0.2.0"
+name = "managecode"
+version = "0.3.0"
 edition = "2021"
 description = "Cross-platform TUI dashboard for Claude Code sessions"
 license = "MIT"
-repository = "https://github.com/ChengAoShen/MinionsCode"
+repository = "https://github.com/ChengAoShen/ManageCode"
 readme = "README.md"
 keywords = ["tui", "claude", "claude-code", "terminal", "dashboard"]
 categories = ["command-line-utilities"]
 
 [[bin]]
-name = "minionscode"
+name = "managecode"
 path = "src/main.rs"
 
 [dependencies]

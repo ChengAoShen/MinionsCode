@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// All tmux sessions managed by MinionsCode are prefixed with this string,
+/// All tmux sessions managed by ManageCode are prefixed with this string,
 /// so we can find them with a single `list-sessions` call and not collide
 /// with the user's own tmux sessions.
 pub const PREFIX: &str = "mc-";

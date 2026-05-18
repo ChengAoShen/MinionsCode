@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Download and install a prebuilt minionscode binary from GitHub Releases.
+# Download and install a prebuilt managecode binary from GitHub Releases.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/ChengAoShen/MinionsCode/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ChengAoShen/ManageCode/main/install.sh | bash
 #
 # Env overrides:
 #   VERSION       specific release tag (default: latest)
@@ -11,7 +11,7 @@
 # Requires: curl, tar. No Rust toolchain needed.
 set -euo pipefail
 
-REPO="ChengAoShen/MinionsCode"
+REPO="ChengAoShen/ManageCode"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${VERSION:-}"
 
@@ -44,7 +44,7 @@ if [ -z "$VERSION" ]; then
   [ -n "$VERSION" ] || err "could not resolve the latest release tag"
 fi
 
-ASSET="minionscode-${VERSION}-${os}-${arch}.tar.gz"
+ASSET="managecode-${VERSION}-${os}-${arch}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
 
 printf '→ %s\n' "${ASSET}"
@@ -56,13 +56,13 @@ curl -fsSL "$URL" -o "$TMP/$ASSET" \
 
 tar -xzf "$TMP/$ASSET" -C "$TMP"
 
-[ -f "$TMP/minionscode" ] || err "archive did not contain a 'minionscode' binary"
+[ -f "$TMP/managecode" ] || err "archive did not contain a 'managecode' binary"
 
 mkdir -p "$INSTALL_DIR"
-mv "$TMP/minionscode" "$INSTALL_DIR/minionscode"
-chmod +x "$INSTALL_DIR/minionscode"
+mv "$TMP/managecode" "$INSTALL_DIR/managecode"
+chmod +x "$INSTALL_DIR/managecode"
 
-printf '✓ installed: %s/minionscode (%s)\n' "$INSTALL_DIR" "$VERSION"
+printf '✓ installed: %s/managecode (%s)\n' "$INSTALL_DIR" "$VERSION"
 
 # PATH hint.
 if ! printf ':%s:' "$PATH" | grep -q ":${INSTALL_DIR}:"; then
@@ -74,5 +74,5 @@ fi
 # macOS gatekeeper note: prebuilt binary is unsigned.
 if [ "$os" = "macos" ]; then
   printf '\n  note: macOS may quarantine unsigned binaries on first run.\n'
-  printf '  if blocked: xattr -d com.apple.quarantine %s/minionscode\n' "$INSTALL_DIR"
+  printf '  if blocked: xattr -d com.apple.quarantine %s/managecode\n' "$INSTALL_DIR"
 fi

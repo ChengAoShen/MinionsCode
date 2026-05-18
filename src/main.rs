@@ -39,7 +39,7 @@ fn parse_args() -> Args {
                 std::process::exit(0);
             }
             "--version" | "-V" => {
-                println!("minionscode {}", env!("CARGO_PKG_VERSION"));
+                println!("managecode {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             _ => {}
@@ -65,10 +65,10 @@ impl Default for Args {
 
 fn print_help() {
     println!(
-        "MinionsCode — TUI for Claude Code sessions
+        "ManageCode — TUI for Claude Code sessions
 
 USAGE:
-    minionscode [OPTIONS]
+    managecode [OPTIONS]
 
 OPTIONS:
     -d, --days <N>     History horizon in days (default 30)
@@ -555,7 +555,7 @@ fn print_attach_hint(name: &str) {
     // first-time users learn how to detach. tmux's own banner clears it.
     let _ = writeln!(
         io::stdout(),
-        "→ tmux session {}  (Ctrl-b d to detach back to MinionsCode)",
+        "→ tmux session {}  (Ctrl-b d to detach back to ManageCode)",
         name
     );
     let _ = io::stdout().flush();
@@ -606,7 +606,7 @@ fn run_exec_direct(pending: PendingExec) {
 }
 
 fn pause() {
-    eprint!("\npress enter to return to MinionsCode…");
+    eprint!("\npress enter to return to ManageCode…");
     let _ = io::stderr().flush();
     let mut buf = String::new();
     let _ = io::stdin().read_line(&mut buf);

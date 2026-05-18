@@ -40,7 +40,7 @@ pub fn claude_dir() -> PathBuf {
 
 fn names_file() -> PathBuf {
     dirs::home_dir()
-        .map(|h| h.join(".minionscode").join("session-names.json"))
+        .map(|h| h.join(".managecode").join("session-names.json"))
         .unwrap_or_else(|| PathBuf::from("session-names.json"))
 }
 

@@ -129,7 +129,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App, tier: Layoutness) {
         Line::from(vec![
             Span::styled("◆ ", Style::default().fg(GOLD)),
             Span::styled(
-                "MinionsCode",
+                "ManageCode",
                 Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
             ),
         ])
@@ -137,7 +137,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App, tier: Layoutness) {
         Line::from(vec![
             Span::styled("◆ ", Style::default().fg(GOLD)),
             Span::styled(
-                "MinionsCode",
+                "ManageCode",
                 Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
             ),
             Span::styled("  Claude session dashboard", Style::default().fg(MUTED)),

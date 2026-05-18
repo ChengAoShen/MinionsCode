@@ -96,7 +96,7 @@ fn fire(name: &str) {
     use std::io::Write;
     let _ = std::io::stdout().flush();
     let _ = Command::new("notify-send")
-        .arg("--app-name=MinionsCode")
+        .arg("--app-name=ManageCode")
         .arg("--icon=utilities-terminal")
         .arg("Claude finished")
         .arg(name)
